@@ -1,0 +1,8 @@
+{
+  "linker_name": "Ranking LLM",
+  "llm_model_path": null,
+  "top_k": 5,
+  "experiment_description": "Ranking-based entity linking using transformers LLM. Detects entities, generates descriptions, and uses iterative LLM-based candidate selection."
+}
+
+

@@ -1,0 +1,11 @@
+{
+  "linker_name": "Graph LLM",
+  "llm_model_path": null,
+  "n_descriptions": 3,
+  "k_search": 5,
+  "t_max": 5,
+  "high_confidence_threshold": 0.9,
+  "experiment_description": "Graph-based entity linking using transformers LLM. Builds entity graph and uses LLM for description generation and candidate ranking."
+}
+
+

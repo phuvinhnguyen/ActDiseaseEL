@@ -1,0 +1,6 @@
+{
+  "linker_name": "Random",
+  "random_seed": 42,
+  "experiment_description": "Random baseline linker for testing. Uses SpaCy NER to detect entities and randomly assigns entity IDs from a pool of common entities."
+}
+

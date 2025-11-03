@@ -1,0 +1,10 @@
+venv
+neuralcoref
+__pycache__
+src/elevant/__pycache__
+.idea
+wikidata-types/*.ttl
+wikidata-types/index/*
+!wikidata-types/index/.gitkeep
+wikidata-types/.*
+evaluation-results/*

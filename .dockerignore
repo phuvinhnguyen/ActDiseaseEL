@@ -1,0 +1,13 @@
+articles
+linker-files
+wikidata-mappings
+wikipedia-articles
+wikipedia-mappings
+evaluation-results
+benchmarks
+wikidata-types/*
+qlever
+wikifier
+neural-el
+wexea
+data

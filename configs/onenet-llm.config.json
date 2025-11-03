@@ -1,0 +1,9 @@
+{
+  "linker_name": "OneNet LLM",
+  "llm_model_path": null,
+  "top_k": 5,
+  "shuffle_candidates": true,
+  "experiment_description": "OneNet-style entity linking using transformers LLM. Uses OneNet-style prompts with shuffled candidates for entity selection."
+}
+
+

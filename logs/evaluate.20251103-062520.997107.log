@@ -1,0 +1,63 @@
+2025-11-03 06:25:20 [DEBUG]: evaluate.py evaluation-results/bm25-db/bm25-db-test.kore50.linked_articles.jsonl -b kore50
+2025-11-03 06:25:20 [INFO]: Evaluating linking results from [95m['evaluation-results/bm25-db/bm25-db-test.kore50.linked_articles.jsonl'][0m ...
+2025-11-03 06:25:20 [INFO]: Loading whitelist types from small-data-files/whitelist_types.tsv ...
+2025-11-03 06:25:20 [INFO]: Loading whitelist type adjustments from small-data-files/type_adjustments.txt ...
+2025-11-03 06:25:20 [INFO]: -> Whitelist type adjustments loaded.
+2025-11-03 06:25:20 [INFO]: -> 29 whitelist types loaded.
+2025-11-03 06:25:20 [INFO]: Initializing entity database for evaluation ...
+2025-11-03 06:25:20 [INFO]: Loading entity ID to name database from /tmp/elevant_data/wikidata-mappings/qid_to_label.db ...
+2025-11-03 06:25:20 [INFO]: -> 0 entity ID to name mappings loaded.
+2025-11-03 06:25:20 [INFO]: Loading entity ID to whitelist types database from /tmp/elevant_data/wikidata-mappings/qid_to_whitelist_types.db ...
+2025-11-03 06:25:20 [INFO]: -> 0 entity ID to whitelist types mappings loaded.
+2025-11-03 06:25:20 [INFO]: Loading whitelist type adjustments from small-data-files/type_adjustments.txt ...
+2025-11-03 06:25:20 [INFO]: -> Whitelist type adjustments loaded.
+2025-11-03 06:25:20 [INFO]: Loading Wikipedia to Wikidata database from /tmp/elevant_data/wikidata-mappings/wikipedia_name_to_qid.db ...
+2025-11-03 06:25:20 [INFO]: -> 0 Wikipedia-Wikidata mappings loaded.
+2025-11-03 06:25:20 [INFO]: Loading redirects database from /tmp/elevant_data/wikipedia-mappings/redirects.db ...
+2025-11-03 06:25:20 [INFO]: -> 0 redirects loaded.
+2025-11-03 06:25:20 [INFO]: Loading demonyms from /tmp/elevant_data/wikidata-mappings/qid_to_demonym.tsv ...
+2025-11-03 06:25:20 [INFO]: -> 0 demonyms loaded
+2025-11-03 06:25:20 [INFO]: Loading real numbers from /tmp/elevant_data/wikidata-mappings/quantity.tsv ...
+2025-11-03 06:25:20 [INFO]: -> 0 real numbers loaded.
+2025-11-03 06:25:20 [INFO]: Loading points in time from /tmp/elevant_data/wikidata-mappings/datetime.tsv ...
+2025-11-03 06:25:20 [INFO]: -> 0 points in time loaded.
+2025-11-03 06:25:20 [INFO]: Loading family name aliases into entity database ...
+2025-11-03 06:25:20 [INFO]: Yielding given name mapping from /tmp/elevant_data/wikidata-mappings/qid_to_name.tsv ...
+2025-11-03 06:25:20 [INFO]: -> 0 family name aliases loaded into entity database.
+2025-11-03 06:25:20 [INFO]: Loading alias to entity IDs database from /tmp/elevant_data/wikidata-mappings/alias_to_qids.db ...
+2025-11-03 06:25:20 [INFO]: -> 0 alias to entity IDs mappings loaded.
+2025-11-03 06:25:20 [INFO]: Loading name to entity ID database from /tmp/elevant_data/wikidata-mappings/label_to_qids.db ...
+2025-11-03 06:25:20 [INFO]: -> 0 name to entity ID mappings loaded.
+2025-11-03 06:25:20 [INFO]: Loading hyperlink to most popular candidates into entity database ...
+2025-11-03 06:25:20 [INFO]: Loading hyperlink to most popular entity IDs database from /tmp/elevant_data/wikipedia-mappings/hyperlink_to_most_popular_candidates.db ...
+2025-11-03 06:25:20 [INFO]: -> 0 hyperlink to most popular entity IDs mappings loaded.
+2025-11-03 06:25:20 [INFO]: -> 0 hyperlink to most popular candidates mappings loaded into entity database.
+2025-11-03 06:25:20 [INFO]: -> Entity database initialized.
+2025-11-03 06:25:22 [INFO]: Retrieving labels from kore50 benchmark file instead of evaluation-results/bm25-db/bm25-db-test.kore50.linked_articles.jsonl
+2025-11-03 06:25:22 [INFO]: Evaluating linking results from [95mevaluation-results/bm25-db/bm25-db-test.kore50.linked_articles.jsonl[0m
+2025-11-03 06:25:22 [WARNING]: Tried to access entity name database, but entity name database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access quantities, but quantities were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access datetimes, but datetimes were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity type database, but entity type database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity name database, but entity name database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access quantities, but quantities were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access datetimes, but datetimes were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity type database, but entity type database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity name database, but entity name database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access quantities, but quantities were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access datetimes, but datetimes were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity type database, but entity type database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity name database, but entity name database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access quantities, but quantities were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access datetimes, but datetimes were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity type database, but entity type database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity name database, but entity name database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access quantities, but quantities were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access datetimes, but datetimes were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity type database, but entity type database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity name database, but entity name database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access quantities, but quantities were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access datetimes, but datetimes were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity type database, but entity type database was not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access demonyms, but demonyms were not loaded.
+2025-11-03 06:25:22 [WARNING]: Tried to access entity type database, but entity type database was not loaded.

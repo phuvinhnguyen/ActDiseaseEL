@@ -1,0 +1,172 @@
+2025-11-03 06:25:05 [DEBUG]: link_benchmark.py BM25-DB-Test -l bm25-db -b kore50
+2025-11-03 06:25:05 [INFO]: Loading config file configs/bm25-db.config.json for linker bm25-db.
+2025-11-03 06:25:05 [INFO]: Loading entities from Wikipedia to Wikidata mapping into entity database ...
+2025-11-03 06:25:05 [INFO]: Loading Wikipedia to Wikidata database from /tmp/elevant_data/wikidata-mappings/wikipedia_name_to_qid.db ...
+2025-11-03 06:25:05 [INFO]: -> 0 Wikipedia-Wikidata mappings loaded.
+2025-11-03 06:25:05 [INFO]: -> Entity database contains 0 entities.
+2025-11-03 06:25:05 [INFO]: Loading entity ID to whitelist types database from /tmp/elevant_data/wikidata-mappings/qid_to_whitelist_types.db ...
+2025-11-03 06:25:05 [INFO]: -> 0 entity ID to whitelist types mappings loaded.
+2025-11-03 06:25:05 [INFO]: Loading whitelist type adjustments from small-data-files/type_adjustments.txt ...
+2025-11-03 06:25:05 [INFO]: -> Whitelist type adjustments loaded.
+2025-11-03 06:25:05 [INFO]: Loading entity ID to name database from /tmp/elevant_data/wikidata-mappings/qid_to_label.db ...
+2025-11-03 06:25:05 [INFO]: -> 0 entity ID to name mappings loaded.
+2025-11-03 06:25:05 [INFO]: Initializing linker bm25-db with config parameters {'linker_name': 'BM25-DB', 'bm25_k1': 1.5, 'bm25_b': 0.75, 'use_popularity': True, 'popularity_weight': 0.3, 'experiment_description': 'BM25 entity linker with local database. Combines BM25 text similarity ranking with entity popularity scores from Wikipedia hyperlink statistics. Uses enhanced SpaCy NER and comprehensive candidate generation from entity database (names, aliases, hyperlinks).'} ...
+2025-11-03 06:25:05 [INFO]: Loading alias to entity IDs database from /tmp/elevant_data/wikidata-mappings/alias_to_qids.db ...
+2025-11-03 06:25:05 [INFO]: -> 0 alias to entity IDs mappings loaded.
+2025-11-03 06:25:05 [INFO]: Loading name to entity ID database from /tmp/elevant_data/wikidata-mappings/label_to_qids.db ...
+2025-11-03 06:25:05 [INFO]: -> 0 name to entity ID mappings loaded.
+2025-11-03 06:25:05 [INFO]: Loading family name aliases into entity database ...
+2025-11-03 06:25:05 [INFO]: Yielding given name mapping from /tmp/elevant_data/wikidata-mappings/qid_to_name.tsv ...
+2025-11-03 06:25:05 [INFO]: -> 0 family name aliases loaded into entity database.
+2025-11-03 06:25:05 [INFO]: Loading hyperlink to most popular candidates into entity database ...
+2025-11-03 06:25:05 [INFO]: Loading hyperlink to most popular entity IDs database from /tmp/elevant_data/wikipedia-mappings/hyperlink_to_most_popular_candidates.db ...
+2025-11-03 06:25:05 [INFO]: -> 0 hyperlink to most popular entity IDs mappings loaded.
+2025-11-03 06:25:05 [INFO]: -> 0 hyperlink to most popular candidates mappings loaded into entity database.
+2025-11-03 06:25:05 [INFO]: Loading entity ID to sitelink count database from /tmp/elevant_data/wikidata-mappings/qid_to_sitelinks.db ...
+2025-11-03 06:25:05 [INFO]: -> 0 entity ID to sitelink count mappings loaded.
+2025-11-03 06:25:07 [INFO]: Loading name to entity ID database from /tmp/elevant_data/wikidata-mappings/label_to_qids.db ...
+2025-11-03 06:25:07 [INFO]: -> 0 name to entity ID mappings loaded.
+2025-11-03 06:25:07 [INFO]: Using enhanced NER with postprocessing
+2025-11-03 06:25:07 [INFO]: Initialized BM25-DB Linker with popularity_weight=0.3
+2025-11-03 06:25:07 [INFO]: -> Linker initialized.
+2025-11-03 06:25:07 [INFO]: Initializing coref linker None ...
+2025-11-03 06:25:07 [INFO]: Coref linker type not found or not specified.
+2025-11-03 06:25:07 [INFO]: Creating directory evaluation-results/bm25-db
+2025-11-03 06:25:07 [INFO]: Linking entities in [95mkore50[0m benchmark ...
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [WARNING]: Tried to access hyperlink to most popular candidates database, but db was not loaded.
+2025-11-03 06:25:07 [INFO]: Wrote metadata to [1mevaluation-results/bm25-db/bm25-db-test.kore50.metadata.json[0m
+2025-11-03 06:25:07 [INFO]: Wrote 50 linked articles to [1mevaluation-results/bm25-db/bm25-db-test.kore50.linked_articles.jsonl[0m

@@ -1,0 +1,9 @@
+{
+  "linker_name": "BM25-DB",
+  "bm25_k1": 1.5,
+  "bm25_b": 0.75,
+  "use_popularity": true,
+  "popularity_weight": 0.3,
+  "experiment_description": "BM25 entity linker with local database. Combines BM25 text similarity ranking with entity popularity scores from Wikipedia hyperlink statistics. Uses enhanced SpaCy NER and comprehensive candidate generation from entity database (names, aliases, hyperlinks)."
+}
+
