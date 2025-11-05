@@ -101,7 +101,7 @@ class BM25DatabaseLinker(AbstractEntityLinker):
             parts.append(entity_name)
         
         # Get aliases
-        aliases = self.entity_db.get_aliases_for_entity(entity_id)
+        aliases = self.entity_db.get_entity_aliases(entity_id)
         if aliases:
             # Limit to top 5 aliases to avoid very long descriptions
             parts.extend(list(aliases)[:5])
