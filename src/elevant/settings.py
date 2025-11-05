@@ -4,8 +4,32 @@ import json
 
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
+# Determine project root directory (where configs/ directory is located)
+# This allows the code to work regardless of where it's imported from
+# Priority: 1) current working directory (where script is run), 2) walk up from settings.py file
+PROJECT_ROOT = None
+_cwd = os.getcwd()
+# First check current working directory (most common case when running scripts)
+if os.path.exists(os.path.join(_cwd, "configs")):
+    PROJECT_ROOT = _cwd
+else:
+    # Try to find configs directory by walking up from current file location
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    for search_dir in [_current_dir, os.path.dirname(_current_dir), os.path.dirname(os.path.dirname(_current_dir)), 
+                       os.path.dirname(os.path.dirname(os.path.dirname(_current_dir)))]:
+        potential_configs = os.path.join(search_dir, "configs")
+        if os.path.exists(potential_configs):
+            PROJECT_ROOT = search_dir
+            break
+# If still not found, use current working directory as fallback
+if PROJECT_ROOT is None:
+    PROJECT_ROOT = _cwd
+
 # Read data directory from config file
-config_path = "configs/elevant.config.json"
+config_path = os.path.join(PROJECT_ROOT, "configs", "elevant.config.json")
+if not os.path.exists(config_path):
+    # Try relative path as fallback
+    config_path = "configs/elevant.config.json"
 config_data_directory = None
 if os.path.exists(config_path):
     logger.info(f"Loading ELEVANT config from {config_path}")
@@ -38,7 +62,7 @@ EXTRACTED_WIKIPEDIA_ARTICLES = WIKIPEDIA_ARTICLES_PATH + "wikipedia.articles.jso
 WIKIPEDIA_TRAINING_ARTICLES = ARTICLE_SPLITS_PATH + "wikipedia/training.jsonl"
 WIKIPEDIA_DEVELOPMENT_ARTICLES = ARTICLE_SPLITS_PATH + "wikipedia/development.jsonl"
 WIKIPEDIA_TEST_ARTICLES = ARTICLE_SPLITS_PATH + "wikipedia/test.jsonl"
-DEV_AND_TEST_ARTICLE_IDS = "small-data-files/dev_and_test_article_ids.pkl"
+DEV_AND_TEST_ARTICLE_IDS = os.path.join(PROJECT_ROOT, "small-data-files", "dev_and_test_article_ids.pkl")
 
 NEWSCRAWL_DEVELOPMENT_ARTICLES = ARTICLE_SPLITS_PATH + "newscrawl/development.jsonl"
 NEWSCRAWL_TEST_ARTICLES = ARTICLE_SPLITS_PATH + "newscrawl/test.jsonl"
@@ -54,12 +78,12 @@ QID_TO_SUBCLASS_OF_FILE = WIKIDATA_MAPPINGS_PATH + "qid_to_p279.tsv"
 QUANTITY_FILE = WIKIDATA_MAPPINGS_PATH + "quantity.tsv"
 DATETIME_FILE = WIKIDATA_MAPPINGS_PATH + "datetime.tsv"
 # Files to generate a mapping from QID to all its relevant types needed for our coref resolver
-COARSE_TYPES = "small-data-files/coarse_types.tsv"
+COARSE_TYPES = os.path.join(PROJECT_ROOT, "small-data-files", "coarse_types.tsv")
 QID_TO_ALL_TYPES_FILE = WIKIDATA_MAPPINGS_PATH + "qid_to_all_types.tsv"
 QID_TO_COREF_TYPES_FILE = WIKIDATA_MAPPINGS_PATH + "qid_to_coreference_types.tsv"
 # Wikidata types files
-WHITELIST_FILE = "small-data-files/whitelist_types.tsv"
-WHITELIST_TYPE_ADJUSTMENTS_FILE = "small-data-files/type_adjustments.txt"
+WHITELIST_FILE = os.path.join(PROJECT_ROOT, "small-data-files", "whitelist_types.tsv")
+WHITELIST_TYPE_ADJUSTMENTS_FILE = os.path.join(PROJECT_ROOT, "small-data-files", "type_adjustments.txt")
 
 # Wikipedia mappings
 LINK_FREEQUENCIES_FILE = WIKIPEDIA_MAPPINGS_PATH + "hyperlink_frequencies.pkl"
@@ -97,12 +121,12 @@ VECTORS_DIRECTORY = LINKER_FILES + "spacy/knowledge_bases/vectors/"
 VECTORS_ABSTRACTS_DIRECTORY = LINKER_FILES + "spacy/knowledge_bases/vectors/vectors_abstracts/"
 
 # Benchmark files
-BENCHMARK_DIR = "benchmarks/"
+BENCHMARK_DIR = os.path.join(PROJECT_ROOT, "benchmarks") + "/"
 
 # Other files and paths
-EVALUATION_RESULTS_DIR = "evaluation-results/"
-LOG_PATH = "logs/"
-TMP_FORKSERVER_CONFIG_FILE = "configs/tmp_forkserver.config.json"
+EVALUATION_RESULTS_DIR = os.path.join(PROJECT_ROOT, "evaluation-results") + "/"
+LOG_PATH = os.path.join(PROJECT_ROOT, "logs") + "/"
+TMP_FORKSERVER_CONFIG_FILE = os.path.join(PROJECT_ROOT, "configs", "tmp_forkserver.config.json")
 
 # Other settings
 LARGE_MODEL_NAME = "en_core_web_lg"
