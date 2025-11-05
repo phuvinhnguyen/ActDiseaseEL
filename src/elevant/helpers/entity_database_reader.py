@@ -1,5 +1,6 @@
 from typing import List, Iterator, Tuple, Dict, Set, Optional
 
+import os
 import pickle
 import logging
 import lmdb
@@ -49,6 +50,9 @@ class EntityDatabaseReader:
             -> Dict[str, Dict[str, str]]:
         logger.info("Loading whitelist type adjustments from %s ..." % adjustments_file)
         adjustments = dict()
+        if not os.path.exists(adjustments_file):
+            logger.warning("Whitelist type adjustments file not found at %s. Using empty adjustments." % adjustments_file)
+            return adjustments
         with open(adjustments_file, "r", encoding="utf8") as file:
             for line in file:
                 line = line.strip()
