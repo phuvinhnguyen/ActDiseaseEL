@@ -45,6 +45,15 @@ class OneNetLinker(AbstractEntityLinker):
         model_path = config.get("llm_model_path", None)
         self.llm_client = LLMClient(model_path) if model_path else None
         
+        # Ensure required entity databases are loaded
+        try:
+            self.entity_db.load_entity_names()
+            self.entity_db.load_alias_to_entities()
+            self.entity_db.load_hyperlink_to_most_popular_candidates()
+            self.entity_db.load_sitelink_counts()
+        except Exception as e:
+            logger.warning(f"Error while loading entity databases: {e}")
+
         # OneNet-specific parameters
         self.top_k = config.get("top_k", 5)
         self.shuffle_candidates = config.get("shuffle_candidates", True)

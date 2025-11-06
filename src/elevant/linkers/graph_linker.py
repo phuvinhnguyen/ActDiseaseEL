@@ -63,6 +63,19 @@ class GraphLinker(AbstractEntityLinker):
         model_path = config.get("llm_model_path", None)
         self.llm_client = LLMClient(model_path) if model_path else None
         
+        # Ensure required entity databases are loaded for candidate search and scoring
+        # - Names for titles and alias aggregation
+        # - Aliases and name-to-entity mappings for candidate generation
+        # - Hyperlink candidates for popular mention->entity mappings
+        # - Sitelink counts for popularity-based scoring
+        try:
+            self.entity_db.load_entity_names()
+            self.entity_db.load_alias_to_entities()
+            self.entity_db.load_hyperlink_to_most_popular_candidates()
+            self.entity_db.load_sitelink_counts()
+        except Exception as e:
+            logger.warning(f"Error while loading entity databases: {e}")
+
         # Graph-specific parameters
         self.N_DESCRIPTIONS = config.get("n_descriptions", 3)
         self.K_SEARCH = config.get("k_search", 5)
