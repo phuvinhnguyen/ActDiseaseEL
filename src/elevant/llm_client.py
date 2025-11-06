@@ -10,6 +10,12 @@ logger = logging.getLogger("main." + __name__.split(".")[-1])
 # Optional imports for HuggingFace models
 try:
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    # Optional bitsandbytes quantization
+    try:
+        from transformers import BitsAndBytesConfig  # type: ignore
+        BNB_AVAILABLE = True
+    except Exception:
+        BNB_AVAILABLE = False
     import torch
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
@@ -45,14 +51,40 @@ class LLMClient:
         try:
             # Get HuggingFace token for gated models
             hf_token = os.getenv('HUGGINGFACE_TOKEN')
+            # Quantization preference (env): 4bit / 8bit / none
+            quant_pref = (os.getenv('LLM_QUANT') or '').strip().lower()  # e.g., "4bit", "8bit"
+            use_4bit = self.device == 'cuda' and BNB_AVAILABLE and (quant_pref == '4bit' or (quant_pref == '' and True))
+            use_8bit = self.device == 'cuda' and BNB_AVAILABLE and (quant_pref == '8bit')
             
             logger.info(f"Loading HuggingFace model from {self.model_path}")
+
+            quantization_config = None
+            from_pretrained_kwargs = {
+                'device_map': 'auto' if self.device == 'cuda' else None,
+                'token': hf_token,
+                'trust_remote_code': True,
+            }
+
+            if use_4bit:
+                logger.info("Using 4-bit quantization (bitsandbytes, nf4)")
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type='nf4',
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                )
+                from_pretrained_kwargs['quantization_config'] = quantization_config
+            elif use_8bit:
+                logger.info("Using 8-bit quantization (bitsandbytes)")
+                # 8-bit path uses load_in_8bit flag
+                from_pretrained_kwargs['load_in_8bit'] = True
+            else:
+                # No quantization
+                from_pretrained_kwargs['torch_dtype'] = torch.float16 if self.device == 'cuda' else torch.float32
+
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
-                device_map='auto' if self.device == 'cuda' else None,
-                token=hf_token,
-                trust_remote_code=True,
-                torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
+                **from_pretrained_kwargs,
             )
             
             if self.device == 'cpu' and self.model is not None:
