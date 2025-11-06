@@ -1,6 +1,6 @@
 {
   "linker_name": "Ranking LLM",
-  "llm_model_path": null,
+  "llm_model_path": "Qwen/Qwen2.5-7B-Instruct",
   "top_k": 5,
   "experiment_description": "Ranking-based entity linking using transformers LLM. Detects entities, generates descriptions, and uses iterative LLM-based candidate selection."
 }
