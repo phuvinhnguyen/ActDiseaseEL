@@ -87,7 +87,8 @@ def main():
         with multiprocessing.Pool(processes=args.multiprocessing, maxtasksperchild=MAX_TASKS_PER_CHILD) as executor:
             logger.info("Start linking using %d processes." % args.multiprocessing)
             for article in executor.imap(link_entities_tuple_argument, iterator, chunksize=CHUNK_SIZE):
-                output_file.write(f"{article.to_json(evaluation_format=False)}\n")
+                # Write with entity mentions for inference output
+                output_file.write(f"{article.to_json(evaluation_format=True)}\n")
                 i += 1
                 if i % 100 == 0:
                     total_time = time.time() - start
@@ -110,7 +111,8 @@ def main():
         for i, tupl in enumerate(iterator):
             article, uppercase, only_pronouns = tupl
             ls.link_entities(article, uppercase, only_pronouns)
-            output_file.write(f"{article.to_json(evaluation_format=False)}\n")
+            # Write with entity mentions for inference output
+            output_file.write(f"{article.to_json(evaluation_format=True)}\n")
             total_time = time.time() - start
             time_per_article = total_time / (i + 1)
             print("\r%i articles, %f s per article, %f s total time." % (i + 1, time_per_article, total_time), end='')
