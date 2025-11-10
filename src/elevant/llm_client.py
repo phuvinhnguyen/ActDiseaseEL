@@ -4,6 +4,7 @@ Simple LLM client using transformers (HuggingFace models) or Gemini API
 import os
 import logging
 import random
+import time
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("main." + __name__.split(".")[-1])
@@ -45,6 +46,18 @@ class LLMClient:
         self.gemini_model = None
         self.gemini_api_keys = []
         self.current_api_key_index = 0
+        
+        # Rate limiting for Gemini API
+        self.last_api_call_time = 0
+        self.min_delay_between_calls = float(os.getenv('GEMINI_MIN_DELAY', '1.0'))  # seconds between calls
+        self.max_retries = int(os.getenv('GEMINI_MAX_RETRIES', '3'))
+        self.retry_delay = float(os.getenv('GEMINI_RETRY_DELAY', '5.0'))  # initial retry delay
+        
+        # Fallback to HuggingFace if Gemini fails persistently
+        self.gemini_failure_count = 0
+        self.gemini_failure_threshold = int(os.getenv('GEMINI_FAILURE_THRESHOLD', '5'))
+        self.fallback_model_path = os.getenv('FALLBACK_MODEL_PATH', 'Qwen/Qwen2.5-7B-Instruct')  # e.g., "Qwen/Qwen2.5-7B-Instruct"
+        self.has_fallen_back = False
         
         # Check if model_path is a Gemini model
         if model_path and model_path.startswith("gemini/"):
@@ -198,17 +211,41 @@ class LLMClient:
             self.tokenizer = None
     
     def call(self, messages: List[Dict[str, str]], max_tokens: int = 512) -> str:
-        """Make a single LLM call"""
-        if self.use_gemini:
-            return self._call_gemini(messages, max_tokens)
+        """Make a single LLM call with automatic fallback"""
+        # Check if we should use Gemini or have fallen back to HuggingFace
+        if self.use_gemini and not self.has_fallen_back:
+            result = self._call_gemini(messages, max_tokens)
+            
+            # If result is empty and we've exceeded failure threshold, try fallback
+            if not result and self.gemini_failure_count >= self.gemini_failure_threshold:
+                logger.warning(f"Gemini failed {self.gemini_failure_count} times. Attempting fallback to HuggingFace...")
+                if self._fallback_to_huggingface():
+                    logger.info("Successfully fell back to HuggingFace model")
+                    return self._call_huggingface(messages, max_tokens)
+            
+            # Reset failure count on successful call
+            if result:
+                self.gemini_failure_count = 0
+            
+            return result
         else:
             return self._call_huggingface(messages, max_tokens)
     
     def _call_gemini(self, messages: List[Dict[str, str]], max_tokens: int = 512) -> str:
-        """Make a call using Gemini API"""
+        """Make a call using Gemini API with rate limiting"""
         if not self.gemini_model:
             logger.error("Gemini model not initialized. Cannot make call.")
             return ""
+        
+        # Rate limiting: ensure minimum delay between API calls
+        current_time = time.time()
+        time_since_last_call = current_time - self.last_api_call_time
+        if time_since_last_call < self.min_delay_between_calls:
+            sleep_time = self.min_delay_between_calls - time_since_last_call
+            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f}s")
+            time.sleep(sleep_time)
+        
+        self.last_api_call_time = time.time()
         
         try:
             # Convert messages to Gemini format
@@ -280,25 +317,108 @@ class LLMClient:
             return ""
                 
         except Exception as e:
-            logger.error(f"Error in Gemini API call: {e}")
-            # Try to switch to next API key if available
-            if "API key" in str(e) or "quota" in str(e).lower() or "permission" in str(e).lower():
-                logger.info("Trying next API key...")
-                model_name = self.model_path.replace("gemini/", "")
-                if not model_name.startswith("models/"):
-                    model_name = f"models/{model_name}"
-                if self._try_next_api_key(model_name):
-                    # Retry with new key
+            error_msg = str(e)
+            logger.error(f"Error in Gemini API call: {error_msg}")
+            
+            # Increment failure count
+            self.gemini_failure_count += 1
+            
+            # Handle rate limit errors with exponential backoff
+            if "quota" in error_msg.lower() or "rate" in error_msg.lower() or "429" in error_msg:
+                logger.warning(f"Rate limit or quota exceeded (failure #{self.gemini_failure_count}). Attempting to handle...")
+                
+                # Try switching to next API key first
+                if "API key" in error_msg or "quota" in error_msg.lower() or "permission" in error_msg.lower():
+                    logger.info("Trying next API key...")
+                    model_name = self.model_path.replace("gemini/", "")
+                    if not model_name.startswith("models/"):
+                        model_name = f"models/{model_name}"
+                    
+                    if self._try_next_api_key(model_name):
+                        # Retry with new key after a delay
+                        time.sleep(self.min_delay_between_calls)
+                        try:
+                            response = self.gemini_model.generate_content(
+                                prompt,
+                                generation_config=generation_config,
+                                safety_settings=safety_settings
+                            )
+                            if response and hasattr(response, 'text') and response.text:
+                                self.gemini_failure_count = 0  # Reset on success
+                                return response.text
+                        except Exception as retry_e:
+                            logger.error(f"Retry with new API key also failed: {retry_e}")
+                            self.gemini_failure_count += 1
+                
+                # If no more keys or key switch failed, try exponential backoff
+                for retry_num in range(self.max_retries):
+                    retry_wait = self.retry_delay * (2 ** retry_num)  # Exponential backoff
+                    logger.info(f"Retry {retry_num + 1}/{self.max_retries}: waiting {retry_wait:.1f}s before retry...")
+                    time.sleep(retry_wait)
+                    
                     try:
                         response = self.gemini_model.generate_content(
                             prompt,
-                            generation_config=generation_config
+                            generation_config=generation_config,
+                            safety_settings=safety_settings
                         )
-                        if response and response.text:
+                        if response and hasattr(response, 'text') and response.text:
+                            logger.info(f"Retry {retry_num + 1} succeeded")
+                            self.gemini_failure_count = 0  # Reset on success
                             return response.text
                     except Exception as retry_e:
-                        logger.error(f"Retry with new API key also failed: {retry_e}")
+                        logger.warning(f"Retry {retry_num + 1} failed: {retry_e}")
+                        if retry_num == self.max_retries - 1:
+                            logger.error("All retries exhausted")
+                            self.gemini_failure_count += 1
+            
+            # Check if we should trigger fallback
+            if self.gemini_failure_count >= self.gemini_failure_threshold:
+                logger.warning(f"Gemini failure threshold reached ({self.gemini_failure_count}/{self.gemini_failure_threshold})")
+            
             return ""
+    
+    def _fallback_to_huggingface(self) -> bool:
+        """Fallback to HuggingFace model when Gemini persistently fails"""
+        if self.has_fallen_back:
+            return True  # Already fallen back
+        
+        if not self.fallback_model_path:
+            logger.error("No fallback model path specified. Set FALLBACK_MODEL_PATH environment variable.")
+            return False
+        
+        if not TRANSFORMERS_AVAILABLE:
+            logger.error("transformers not available. Cannot fallback to HuggingFace.")
+            return False
+        
+        logger.warning(f"Falling back to HuggingFace model: {self.fallback_model_path}")
+        
+        try:
+            # Save original model path and switch
+            original_model_path = self.model_path
+            self.model_path = self.fallback_model_path
+            self.use_gemini = False
+            self.has_fallen_back = True
+            
+            # Initialize HuggingFace model
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._load_model()
+            
+            if self.model and self.tokenizer:
+                logger.info(f"Successfully initialized fallback model: {self.fallback_model_path}")
+                logger.info(f"Original Gemini model ({original_model_path}) will not be used further")
+                return True
+            else:
+                logger.error("Failed to load fallback model")
+                self.has_fallen_back = False
+                self.use_gemini = True
+                self.model_path = original_model_path
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error during fallback to HuggingFace: {e}")
+            self.has_fallen_back = False
+            return False
     
     def _try_next_api_key(self, model_name: str) -> bool:
         """Try to switch to next API key"""
