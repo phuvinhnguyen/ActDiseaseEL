@@ -193,10 +193,13 @@ def create_database_files(entity_to_name: Dict[str, str],
         for entity_id, name in sorted(entity_to_name.items()):
             f.write(f"{entity_id}\t{name}\n")
     
-    # Create database
-    output_db = os.path.join(mappings_dir, "doid_to_label.db")
+    # Create database (use qid_to_label.db name that system expects)
+    output_db = os.path.join(mappings_dir, "qid_to_label.db")
     logger.info(f"Creating database: {output_db}")
-    os.system(f"python3 scripts/create_databases.py {doid_to_label_file} -o {output_db}")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    create_db_script = os.path.join(script_dir, "create_databases.py")
+    os.system(f"cd {project_root} && PYTHONPATH=src python3 {create_db_script} {doid_to_label_file} -o {output_db}")
     
     # 2. Label to DOIDs (reverse) - similar to label_to_qids.db
     label_to_doids_file = os.path.join(output_dir, "label_to_doids.tsv")
@@ -209,9 +212,12 @@ def create_database_files(entity_to_name: Dict[str, str],
         for label, doids in sorted(label_to_doids.items()):
             f.write(f"{label}\t{','.join(sorted(doids))}\n")
     
-    output_db = os.path.join(mappings_dir, "label_to_doids.db")
+    output_db = os.path.join(mappings_dir, "label_to_qids.db")
     logger.info(f"Creating database: {output_db}")
-    os.system(f"python3 scripts/create_databases.py {label_to_doids_file} -f multiple_values -o {output_db}")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    create_db_script = os.path.join(script_dir, "create_databases.py")
+    os.system(f"cd {project_root} && PYTHONPATH=src python3 {create_db_script} {label_to_doids_file} -f multiple_values -o {output_db}")
     
     # 3. DOID to aliases - similar to qid_to_aliases.db
     doid_to_aliases_file = os.path.join(output_dir, "doid_to_aliases.tsv")
@@ -224,9 +230,12 @@ def create_database_files(entity_to_name: Dict[str, str],
             if aliases:
                 f.write(f"{entity_id}\t{';'.join(aliases)}\n")
     
-    output_db = os.path.join(mappings_dir, "doid_to_aliases.db")
+    output_db = os.path.join(mappings_dir, "qid_to_aliases.db")
     logger.info(f"Creating database: {output_db}")
-    os.system(f"python3 scripts/create_databases.py {doid_to_aliases_file} -f multiple_values_semicolon_separated -o {output_db}")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    create_db_script = os.path.join(script_dir, "create_databases.py")
+    os.system(f"cd {project_root} && PYTHONPATH=src python3 {create_db_script} {doid_to_aliases_file} -f multiple_values_semicolon_separated -o {output_db}")
     
     # 4. Alias to DOIDs (reverse) - similar to alias_to_qids.db
     alias_to_doids_file = os.path.join(output_dir, "alias_to_doids.tsv")
@@ -240,9 +249,12 @@ def create_database_files(entity_to_name: Dict[str, str],
         for alias, doids in sorted(alias_to_doids.items()):
             f.write(f"{alias}\t{','.join(sorted(doids))}\n")
     
-    output_db = os.path.join(mappings_dir, "alias_to_doids.db")
+    output_db = os.path.join(mappings_dir, "alias_to_qids.db")
     logger.info(f"Creating database: {output_db}")
-    os.system(f"python3 scripts/create_databases.py {alias_to_doids_file} -f multiple_values -o {output_db}")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    create_db_script = os.path.join(script_dir, "create_databases.py")
+    os.system(f"cd {project_root} && PYTHONPATH=src python3 {create_db_script} {alias_to_doids_file} -f multiple_values -o {output_db}")
     
     # 5. DOID to sitelinks (popularity) - use a simple metric (e.g., 1 for all, or based on hierarchy depth)
     doid_to_sitelinks_file = os.path.join(output_dir, "doid_to_sitelinks.tsv")
@@ -253,9 +265,12 @@ def create_database_files(entity_to_name: Dict[str, str],
             popularity = len(entity_to_aliases.get(entity_id, []))
             f.write(f"{entity_id}\t{popularity}\n")
     
-    output_db = os.path.join(mappings_dir, "doid_to_sitelinks.db")
+    output_db = os.path.join(mappings_dir, "qid_to_sitelinks.db")
     logger.info(f"Creating database: {output_db}")
-    os.system(f"python3 scripts/create_databases.py {doid_to_sitelinks_file} -o {output_db}")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    create_db_script = os.path.join(script_dir, "create_databases.py")
+    os.system(f"cd {project_root} && PYTHONPATH=src python3 {create_db_script} {doid_to_sitelinks_file} -o {output_db}")
     
     logger.info("Database files created successfully")
 

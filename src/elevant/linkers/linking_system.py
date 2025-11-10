@@ -55,9 +55,19 @@ class LinkingSystem:
 
         # When a prediction_file is given linker_name is None
         if coref_linker in db_coref_linkers or linker_name in db_linkers:
-            self.entity_db.load_all_entities_in_wikipedia(minimum_sitelink_count=min_score)
-            self.entity_db.load_entity_types(self.type_mapping_file)
-            self.entity_db.load_entity_names()
+            if self.custom_kb:
+                # Load custom knowledge base mappings
+                from elevant import settings
+                self.entity_db.load_custom_entity_names(settings.CUSTOM_ENTITY_TO_NAME_FILE)
+                self.entity_db.load_custom_entity_types(settings.CUSTOM_ENTITY_TO_TYPES_FILE)
+                # Load custom alias and name mappings from databases
+                self.entity_db.load_alias_to_entities()
+                self.entity_db.load_sitelink_counts()
+            else:
+                # Load Wikipedia/Wikidata mappings
+                self.entity_db.load_all_entities_in_wikipedia(minimum_sitelink_count=min_score)
+                self.entity_db.load_entity_types(self.type_mapping_file)
+                self.entity_db.load_entity_names()
 
     @staticmethod
     def read_linker_config(linker_name: str, config_path: Optional[str] = None) -> Dict[str, Any]:
@@ -317,11 +327,17 @@ class LinkingSystem:
         if MappingName.WIKIDATA_ALIASES in mappings and not self.entity_db.loaded_info.get(MappingName.WIKIDATA_ALIASES):
             self.entity_db.load_alias_to_entities()
         if MappingName.FAMILY_NAME_ALIASES in mappings and not self.entity_db.loaded_info.get(MappingName.FAMILY_NAME_ALIASES):
-            self.entity_db.load_family_name_aliases()
+            if not self.custom_kb:
+                self.entity_db.load_family_name_aliases()
+            else:
+                logger.info("Skipping family name aliases for custom KB (not available)")
         if MappingName.LINK_ALIASES in mappings and not self.entity_db.loaded_info.get(MappingName.LINK_ALIASES):
             self.entity_db.load_link_aliases()
         if MappingName.HYPERLINK_TO_MOST_POPULAR_CANDIDATES in mappings and not self.entity_db.loaded_info.get(MappingName.HYPERLINK_TO_MOST_POPULAR_CANDIDATES):
-            self.entity_db.load_hyperlink_to_most_popular_candidates()
+            if not self.custom_kb:
+                self.entity_db.load_hyperlink_to_most_popular_candidates()
+            else:
+                logger.info("Skipping hyperlink to most popular candidates for custom KB (not available)")
 
         # Inverse alias mappings
         if MappingName.ENTITY_ID_TO_ALIAS in mappings and not self.entity_db.loaded_info.get(MappingName.ENTITY_ID_TO_ALIAS):
