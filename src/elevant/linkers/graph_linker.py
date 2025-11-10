@@ -122,13 +122,21 @@ class GraphLinker(AbstractEntityLinker):
                 prompt = f"""
 TEXT: {text}
 
-CONTEXT: You are a researcher looking for historical entities related to healthcare so that following experts can find the relation between those terms with modern knowledge.
+CONTEXT: You are a medical researcher extracting disease and health-related entities from historical texts. Your task is to identify ONLY medical conditions, diseases, symptoms, treatments, and health-related terms that can be mapped to the Human Disease Ontology (DOID).
 
 INSTRUCTIONS:
-1. Identify all important entities (people, organizations, locations, products, events, etc.) that are relevant to healthcare.
-2. Only include entities that are relevant to healthcare.
-2. For each entity, provide the entity text and a short context window around it
-3. Identify relationships between entities
+1. Identify ONLY disease and health-related entities:
+   - Medical conditions and diseases (e.g., "diabetes", "cancer", "angiosarcoma")
+   - Symptoms and signs (e.g., "fever", "pain", "inflammation")
+   - Health-related terms (e.g., "treatment", "diagnosis", "syndrome")
+   - Anatomical terms related to diseases (e.g., "breast cancer", "lung disease")
+2. IGNORE all non-healthcare entities:
+   - Do NOT include: people names, locations, organizations, dates, numbers, or general terms
+   - Do NOT include: places (e.g., "Kew Gardens", "Surrey", "Leven Park")
+   - Do NOT include: person names (e.g., "THOMSON", "Thompson")
+   - Do NOT include: ages or time periods (e.g., "37 years")
+3. For each health-related entity, provide the entity text and a short context window around it
+4. Identify relationships between disease entities if relevant
 
 OUTPUT FORMAT:
 For each entity, output:
@@ -138,13 +146,15 @@ For each relation, output:
 RELATION: [entity1_text] -> [entity2_text] | [relation_type]
 
 Example:
-ENTITY: Apple | technology company Apple Inc. is headquartered
-ENTITY: California | headquartered in Cupertino, California
-RELATION: Apple -> California | located_in
+ENTITY: diabetes | patient diagnosed with diabetes mellitus
+ENTITY: breast cancer | treatment for breast cancer
+RELATION: diabetes -> breast cancer | associated_with
 
 IMPORTANT:
 - Entity text must match exactly what appears in the text
 - Context window should be 5-10 words around the entity
+- ONLY output disease and health-related entities
+- If no health-related entities are found, output nothing
 - Only output entities and relations, no other text
 """
                 
