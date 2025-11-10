@@ -1,0 +1,10 @@
+{
+  "linker_name": "Graph LLM Gemini",
+  "llm_model_path": "gemini/gemini-2.5-flash",
+  "n_descriptions": 3,
+  "k_search": 5,
+  "t_max": 5,
+  "high_confidence_threshold": 0.9,
+  "experiment_description": "Graph-based entity linking using Gemini API. Builds entity graph and uses Gemini for description generation and candidate ranking."
+}
+

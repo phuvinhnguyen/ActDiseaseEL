@@ -1,1 +1,1 @@
-{"linker_name": "bm25-db", "linker_config": null, "coreference_linker": null, "minimum_score": 0, "type_mapping": "/tmp/elevant_data/wikidata-mappings/qid_to_whitelist_types.db", "custom_kb": true}
+{"linker_name": "graph-llm", "linker_config": "configs/graph-llm-gemini.config.json", "coreference_linker": null, "minimum_score": 0, "type_mapping": "/tmp/elevant_data/wikidata-mappings/qid_to_whitelist_types.db", "custom_kb": true}

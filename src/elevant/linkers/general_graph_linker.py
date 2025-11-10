@@ -63,26 +63,13 @@ class GraphLinker(AbstractEntityLinker):
         model_path = config.get("llm_model_path", None)
         self.llm_client = LLMClient(model_path) if model_path else None
         
-        # For Gemini API, check if model is available
-        if self.llm_client and self.llm_client.use_gemini:
-            if not self.llm_client.gemini_model:
-                logger.warning("Gemini model not initialized. LLM features will be disabled.")
-                self.llm_client = None
-            else:
-                logger.info(f"Gemini API initialized with model: {model_path}")
-        
         # Ensure required entity databases are loaded for candidate search and scoring
         # - Names for titles and alias aggregation
         # - Aliases and name-to-entity mappings for candidate generation
         # - Hyperlink candidates for popular mention->entity mappings
         # - Sitelink counts for popularity-based scoring
         try:
-            # Only load entity names if not already loaded (e.g., by custom KB)
-            if not self.entity_db.entity_name_db:
-                self.entity_db.load_entity_names()
-            # Ensure name_to_entities_db is loaded for get_candidates()
-            if not self.entity_db.name_to_entities_db:
-                self.entity_db.load_name_to_entities()
+            self.entity_db.load_entity_names()
             self.entity_db.load_alias_to_entities()
             self.entity_db.load_hyperlink_to_most_popular_candidates()
             self.entity_db.load_sitelink_counts()
@@ -102,42 +89,15 @@ class GraphLinker(AbstractEntityLinker):
         """Build entity graph from text using LLM and spaCy"""
         graph_nodes = {}
         
-        # Non-healthcare entity labels to filter out for DOID
-        NON_HEALTHCARE_LABELS = {
-            "GPE",      # Geopolitical entity (countries, cities, states)
-            "LOC",      # Location (non-geopolitical locations)
-            "PERSON",   # People
-            "ORG",      # Organizations (unless healthcare-related, but hard to filter)
-            "DATE",     # Dates
-            "TIME",     # Times
-            "CARDINAL", # Numbers
-            "ORDINAL",  # Ordinal numbers
-            "MONEY",    # Money
-            "QUANTITY", # Quantities
-            "PERCENT",  # Percentages
-            "EVENT",    # Events
-            "FAC",      # Facilities (buildings, airports, etc.)
-        }
-        
         # First, detect entities using spaCy
         entities = []
         for ent in doc.ents:
             if ent.label_ in NER_IGNORE_TAGS:
                 continue
-            # Filter out non-healthcare entities for DOID
-            if ent.label_ in NON_HEALTHCARE_LABELS:
-                continue
             span = (ent.start_char, ent.end_char)
             snippet = text[span[0]:span[1]]
             if is_date(snippet):
                 continue
-            
-            # Additional filtering: skip if it looks like a location or person name
-            snippet_lower = snippet.lower()
-            if any(word in snippet_lower for word in ['street', 'road', 'avenue', 'park', 'garden', 'hospital', 'clinic']):
-                # Skip if it's clearly a location (unless it's a disease name with these words)
-                if not any(disease_word in snippet_lower for disease_word in ['disease', 'syndrome', 'cancer', 'tumor']):
-                    continue
             
             context_left = text[max(0, span[0] - 50):span[0]]
             context_right = text[span[1]:min(len(text), span[1] + 50)]
@@ -151,27 +111,16 @@ class GraphLinker(AbstractEntityLinker):
             })
         
         # If LLM client available, try to enhance detection and get relations
-        if self.llm_client and (self.llm_client.model or self.llm_client.gemini_model):
+        if self.llm_client and self.llm_client.model:
             try:
                 # Use LLM to detect additional entities and relations
                 prompt = f"""
 TEXT: {text}
 
-CONTEXT: You are a medical researcher extracting disease and health-related entities from historical texts. Your task is to identify ONLY medical conditions, diseases, symptoms, treatments, and health-related terms that can be mapped to the Human Disease Ontology (DOID).
-
 INSTRUCTIONS:
-1. Identify ONLY disease and health-related entities:
-   - Medical conditions and diseases (e.g., "diabetes", "cancer", "angiosarcoma")
-   - Symptoms and signs (e.g., "fever", "pain", "inflammation")
-   - Health-related terms (e.g., "treatment", "diagnosis", "syndrome")
-   - Anatomical terms related to diseases (e.g., "breast cancer", "lung disease")
-2. IGNORE all non-healthcare entities:
-   - Do NOT include: people names, locations, organizations, dates, numbers, or general terms
-   - Do NOT include: places (e.g., "Kew Gardens", "Surrey", "Leven Park")
-   - Do NOT include: person names (e.g., "THOMSON", "Thompson")
-   - Do NOT include: ages or time periods (e.g., "37 years")
-3. For each health-related entity, provide the entity text and a short context window around it
-4. Identify relationships between disease entities if relevant
+1. Identify all important entities (people, organizations, locations, products, events, etc.)
+2. For each entity, provide the entity text and a short context window around it
+3. Identify relationships between entities
 
 OUTPUT FORMAT:
 For each entity, output:
@@ -181,15 +130,13 @@ For each relation, output:
 RELATION: [entity1_text] -> [entity2_text] | [relation_type]
 
 Example:
-ENTITY: diabetes | patient diagnosed with diabetes mellitus
-ENTITY: breast cancer | treatment for breast cancer
-RELATION: diabetes -> breast cancer | associated_with
+ENTITY: Apple | technology company Apple Inc. is headquartered
+ENTITY: California | headquartered in Cupertino, California
+RELATION: Apple -> California | located_in
 
 IMPORTANT:
 - Entity text must match exactly what appears in the text
 - Context window should be 5-10 words around the entity
-- ONLY output disease and health-related entities
-- If no health-related entities are found, output nothing
 - Only output entities and relations, no other text
 """
                 
@@ -272,7 +219,7 @@ IMPORTANT:
     
     def _generate_descriptions(self, node: GraphNode, text: str):
         """Generate descriptions for entity using LLM"""
-        if not self.llm_client or (not self.llm_client.model and not self.llm_client.gemini_model):
+        if not self.llm_client or not self.llm_client.model:
             # Fallback descriptions
             node.descriptions = [
                 f"The entity: {node.entity_text}",
@@ -354,15 +301,13 @@ Make each description distinct and informative.
             # Convert to dict format with title and description
             for entity_id in candidates:
                 entity_name = self.entity_db.get_entity_name(entity_id)
-                if entity_name and entity_name != "Unknown":
+                if entity_name:
                     all_candidates.append({
                         'id': entity_id,
                         'title': entity_name,
                         'description': f"Entity: {entity_name}",
                         'score': self.entity_db.get_sitelink_count(entity_id)
                     })
-                else:
-                    logger.debug(f"  Skipping candidate {entity_id}: entity_name={entity_name}")
         
         # Remove duplicates and sort by score
         seen_ids = set()
@@ -375,34 +320,6 @@ Make each description distinct and informative.
                     break
         
         node.candidates = unique_candidates
-        if not unique_candidates:
-            # Check if entity looks like a healthcare term
-            entity_lower = node.entity_text.lower()
-            healthcare_keywords = [
-                'disease', 'syndrome', 'cancer', 'tumor', 'tumour', 'carcinoma', 'sarcoma',
-                'diabetes', 'fever', 'pain', 'inflammation', 'infection', 'virus', 'bacteria',
-                'disorder', 'condition', 'illness', 'symptom', 'sign', 'diagnosis', 'treatment',
-                'therapy', 'medication', 'drug', 'pathology', 'lesion', 'malformation', 'anomaly'
-            ]
-            is_healthcare_term = any(keyword in entity_lower for keyword in healthcare_keywords)
-            
-            if is_healthcare_term:
-                # This might be a healthcare entity, so log as warning
-                logger.warning(f"No candidates found for healthcare entity '{node.entity_text}' with queries: {search_queries}")
-                # Debug: check what get_candidates returns
-                for query in search_queries:
-                    if len(query) >= 2:
-                        candidates = self.entity_db.get_candidates(query)
-                        logger.warning(f"  Query '{query}' -> {len(candidates)} candidates from get_candidates()")
-                        if candidates:
-                            sample_id = list(candidates)[0]
-                            entity_name = self.entity_db.get_entity_name(sample_id)
-                            logger.warning(f"    Sample candidate: {sample_id} -> name={entity_name}")
-            else:
-                # Not a healthcare term, so just debug log (expected to have no candidates)
-                logger.debug(f"No candidates found for non-healthcare entity '{node.entity_text}' (expected)")
-        else:
-            logger.debug(f"Found {len(unique_candidates)} candidates for entity '{node.entity_text}'")
     
     def _select_best_candidate(self, node: GraphNode) -> Optional[str]:
         """Select best candidate using LLM ranking"""
@@ -412,7 +329,7 @@ Make each description distinct and informative.
         if len(node.candidates) == 1:
             return node.candidates[0]['id']
         
-        if not self.llm_client or (not self.llm_client.model and not self.llm_client.gemini_model):
+        if not self.llm_client or not self.llm_client.model:
             # Fallback: select highest scoring candidate
             best = max(node.candidates, key=lambda x: x.get('score', 0))
             return best['id']
