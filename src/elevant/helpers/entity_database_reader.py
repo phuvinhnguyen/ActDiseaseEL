@@ -318,3 +318,16 @@ class EntityDatabaseReader:
             entity_to_types[entity_id] = lst[1:]
         logger.info(f"-> {len(entity_to_types)} entity ID to types mappings loaded.")
         return entity_to_types
+    
+    @staticmethod
+    def get_entity_descriptions_mapping(filename: str) -> Dict[str, str]:
+        logger.info("Loading entity ID to descriptions mapping from %s ..." % filename)
+        entity_to_descriptions = {}
+        for line in open(filename, "r", encoding="utf8"):
+            parts = line.strip('\n').split('\t', 1)  # Split only on first tab
+            if len(parts) == 2:
+                entity_id, description = parts
+                if description:  # Only add if description is not empty
+                    entity_to_descriptions[entity_id] = description
+        logger.info(f"-> {len(entity_to_descriptions)} entity ID to descriptions mappings loaded.")
+        return entity_to_descriptions

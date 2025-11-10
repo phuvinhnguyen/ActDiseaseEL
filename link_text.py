@@ -66,6 +66,91 @@ def article_iterator(filename):
             yield article, args.uppercase, args.only_pronouns
 
 
+def get_full_entity_info(entity_id, entity_db):
+    """Get complete entity information"""
+    if not entity_id or entity_id == "<NIL>":
+        return None
+    
+    entity_info = {
+        "id": entity_id,
+        "name": None,
+        "description": None,
+        "types": [],
+        "aliases": [],
+        "popularity": 0
+    }
+    
+    # Get entity name
+    entity_name = entity_db.get_entity_name(entity_id)
+    if entity_name and entity_name != "Unknown":
+        entity_info["name"] = entity_name
+    
+    # Get entity description
+    try:
+        entity_description = entity_db.get_entity_description(entity_id)
+        if entity_description:
+            entity_info["description"] = entity_description
+    except Exception as e:
+        # Debug: log the exception
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Error getting description for {entity_id}: {e}")
+    
+    # Get entity types
+    try:
+        entity_types = entity_db.get_entity_types(entity_id)
+        if entity_types:
+            entity_info["types"] = entity_types
+    except Exception:
+        pass
+    
+    # Get entity aliases
+    try:
+        entity_aliases = entity_db.get_entity_aliases(entity_id)
+        if entity_aliases:
+            entity_info["aliases"] = sorted(list(entity_aliases))
+    except Exception:
+        pass
+    
+    # Get popularity score (sitelink count)
+    try:
+        sitelink_count = entity_db.get_sitelink_count(entity_id)
+        if sitelink_count:
+            entity_info["popularity"] = sitelink_count
+    except Exception:
+        pass
+    
+    return entity_info
+
+
+def enrich_article_with_entity_info(article_dict, entity_db):
+    """Add full entity information to the article output"""
+    if "entity_mentions" in article_dict:
+        for mention in article_dict["entity_mentions"]:
+            # Add full information for the linked entity
+            entity_id = mention.get("id")
+            entity_info = get_full_entity_info(entity_id, entity_db)
+            
+            if entity_info:
+                mention["entity"] = entity_info
+                # Keep backward compatibility
+                mention["entity_name"] = entity_info["name"]
+            else:
+                mention["entity"] = None
+                mention["entity_name"] = None
+            
+            # Add full information for candidates
+            if "candidates" in mention:
+                candidate_info = []
+                for cand_id in mention["candidates"]:
+                    cand_info = get_full_entity_info(cand_id, entity_db)
+                    if cand_info:
+                        candidate_info.append(cand_info)
+                mention["candidates"] = candidate_info
+    
+    return article_dict
+
+
 def main():
     logger.info("Linking entities in file %s" % args.input_file)
 
@@ -86,9 +171,23 @@ def main():
         last_time = start
         with multiprocessing.Pool(processes=args.multiprocessing, maxtasksperchild=MAX_TASKS_PER_CHILD) as executor:
             logger.info("Start linking using %d processes." % args.multiprocessing)
+            # For multiprocessing, we need to enrich after linking
+            # Load entity database for enrichment
+            from elevant.models.entity_database import EntityDatabase
+            entity_db = EntityDatabase()
+            if args.custom_kb:
+                entity_db.load_custom_entity_names(settings.CUSTOM_ENTITY_TO_NAME_FILE)
+                entity_db.load_custom_entity_types(settings.CUSTOM_ENTITY_TO_TYPES_FILE)
+                entity_db.load_custom_entity_descriptions(settings.CUSTOM_ENTITY_TO_DESCRIPTIONS_FILE)
+            else:
+                entity_db.load_entity_names()
+                entity_db.load_entity_types()
+            
             for article in executor.imap(link_entities_tuple_argument, iterator, chunksize=CHUNK_SIZE):
-                # Write with entity mentions for inference output
-                output_file.write(f"{article.to_json(evaluation_format=True)}\n")
+                # Enrich with entity information
+                article_dict = json.loads(article.to_json(evaluation_format=True))
+                article_dict = enrich_article_with_entity_info(article_dict, entity_db)
+                output_file.write(f"{json.dumps(article_dict)}\n")
                 i += 1
                 if i % 100 == 0:
                     total_time = time.time() - start
@@ -112,8 +211,10 @@ def main():
         for i, tupl in enumerate(iterator):
             article, uppercase, only_pronouns = tupl
             ls.link_entities(article, uppercase, only_pronouns)
-            # Write with entity mentions for inference output
-            output_file.write(f"{article.to_json(evaluation_format=True)}\n")
+            # Enrich with entity information
+            article_dict = json.loads(article.to_json(evaluation_format=True))
+            article_dict = enrich_article_with_entity_info(article_dict, ls.entity_db)
+            output_file.write(f"{json.dumps(article_dict)}\n")
             total_time = time.time() - start
             time_per_article = total_time / (i + 1)
             print("\r%i articles, %f s per article, %f s total time." % (i + 1, time_per_article, total_time), end='')

@@ -107,6 +107,7 @@ HYPERLINK_TO_MOST_POPULAR_CANDIDATES_DB = WIKIPEDIA_MAPPINGS_PATH + "hyperlink_t
 # Custom mappings (have to be created by the user, e.g. using the scripts/extract_custom_mappings.py script)
 CUSTOM_ENTITY_TO_NAME_FILE = DATA_DIRECTORY + "custom-mappings/entity_to_name.tsv"
 CUSTOM_ENTITY_TO_TYPES_FILE = DATA_DIRECTORY + "custom-mappings/entity_to_types.tsv"
+CUSTOM_ENTITY_TO_DESCRIPTIONS_FILE = DATA_DIRECTORY + "custom-mappings/entity_to_descriptions.tsv"
 CUSTOM_WHITELIST_TYPES_FILE = DATA_DIRECTORY + "custom-mappings/whitelist_types.tsv"
 
 # Linker files

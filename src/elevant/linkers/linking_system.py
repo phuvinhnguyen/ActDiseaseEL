@@ -48,7 +48,8 @@ class LinkingSystem:
         # Linkers for which to load entities into the entity database, including their types and names.
         # The Wikipedia2Wikidata mapping that might be loaded in _initialize_linker()
         # remains unaffected by this.
-        db_linkers = (Linkers.BASELINE.value, Linkers.POPULAR_ENTITIES.value, Linkers.POS_PRIOR.value, Linkers.BM25_DB.value)
+        db_linkers = (Linkers.BASELINE.value, Linkers.POPULAR_ENTITIES.value, Linkers.POS_PRIOR.value, Linkers.BM25_DB.value,
+                     Linkers.GRAPH_LLM.value, Linkers.RANKING_LLM.value, Linkers.ONENET_LLM.value)
         db_coref_linkers = (CoreferenceLinkers.KB_COREF.value,)
 
         self.entity_db = EntityDatabase()
@@ -60,6 +61,7 @@ class LinkingSystem:
                 from elevant import settings
                 self.entity_db.load_custom_entity_names(settings.CUSTOM_ENTITY_TO_NAME_FILE)
                 self.entity_db.load_custom_entity_types(settings.CUSTOM_ENTITY_TO_TYPES_FILE)
+                self.entity_db.load_custom_entity_descriptions(settings.CUSTOM_ENTITY_TO_DESCRIPTIONS_FILE)
                 # Load custom alias and name mappings from databases
                 self.entity_db.load_alias_to_entities()
                 self.entity_db.load_sitelink_counts()

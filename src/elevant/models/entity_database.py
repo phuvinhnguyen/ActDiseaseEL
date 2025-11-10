@@ -55,6 +55,8 @@ class EntityDatabase:
         self.entity_type_db: Database
         self.entity_name_db = {}
         self.entity_name_db: Database
+        self.entity_description_db = {}
+        self.entity_description_db: Database
         self.alias_to_entities_db = {}
         self.alias_to_entities_db: Database
         self.family_name_aliases = {}
@@ -127,6 +129,12 @@ class EntityDatabase:
             self.entity_type_db = EntityDatabaseReader.get_entity_types_mapping(filename)
         else:
             logger.info("Entity type mapping already loaded.")
+    
+    def load_custom_entity_descriptions(self, filename: str):
+        if not self.entity_description_db:
+            self.entity_description_db = EntityDatabaseReader.get_entity_descriptions_mapping(filename)
+        else:
+            logger.info("Entity description mapping already loaded.")
 
     def get_entity_types(self, entity_id: str) -> Optional[List[str]]:
         if len(self.entity_type_db) == 0:
@@ -191,6 +199,11 @@ class EntityDatabase:
             logger.warning("Tried to access entity name database, but entity name database was not loaded.")
             return None
         return self.entity_name_db[entity_id] if entity_id in self.entity_name_db else "Unknown"
+    
+    def get_entity_description(self, entity_id: str) -> Optional[str]:
+        if len(self.entity_description_db) == 0:
+            return None
+        return self.entity_description_db.get(entity_id, None)
 
     def load_name_to_entities(self):
         self.loaded_info[MappingName.NAME_TO_ENTITY_ID] = LoadedInfo(LoadingType.FULL)

@@ -129,6 +129,7 @@ def parse_obo_file(obo_file: str) -> Tuple[Dict[str, str], Dict[str, List[str]],
 def create_custom_mappings(entity_to_name: Dict[str, str],
                           entity_to_aliases: Dict[str, List[str]],
                           entity_to_types: Dict[str, List[str]],
+                          entity_to_def: Dict[str, str],
                           output_dir: str):
     """Create custom mapping files for elevant"""
     logger = logging.getLogger("main." + __name__.split(".")[-1])
@@ -157,7 +158,18 @@ def create_custom_mappings(entity_to_name: Dict[str, str],
             f.write(f"{entity_id}\t" + "\t".join(types) + "\n")
     logger.info(f"Wrote {len(entity_to_name)} entity to types mappings")
     
-    # 3. Whitelist types (just "Disease" for now, but could include parent types)
+    # 3. Entity to descriptions mapping
+    entity_to_descriptions_file = os.path.join(output_dir, "entity_to_descriptions.tsv")
+    logger.info(f"Writing entity to descriptions mappings to {entity_to_descriptions_file}")
+    with open(entity_to_descriptions_file, 'w', encoding='utf-8') as f:
+        for entity_id in sorted(entity_to_name.keys()):
+            description = entity_to_def.get(entity_id, '')
+            # Escape tabs and newlines in description
+            description = description.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+            f.write(f"{entity_id}\t{description}\n")
+    logger.info(f"Wrote {len(entity_to_def)} entity to descriptions mappings ({len(entity_to_name) - len(entity_to_def)} without descriptions)")
+    
+    # 4. Whitelist types (just "Disease" for now, but could include parent types)
     whitelist_types_file = os.path.join(output_dir, "whitelist_types.tsv")
     logger.info(f"Writing whitelist types to {whitelist_types_file}")
     all_types = {"Disease": "Disease"}
@@ -172,7 +184,7 @@ def create_custom_mappings(entity_to_name: Dict[str, str],
             f.write(f"{type_id}\t{type_name}\n")
     logger.info(f"Wrote {len(all_types)} whitelist types")
     
-    return entity_to_name_file, entity_to_types_file, whitelist_types_file
+    return entity_to_name_file, entity_to_types_file, entity_to_descriptions_file, whitelist_types_file
 
 
 def create_database_files(entity_to_name: Dict[str, str],
@@ -283,8 +295,8 @@ def main(args):
     
     # Create custom mappings
     custom_mappings_dir = os.path.join(args.data_directory, "custom-mappings")
-    entity_to_name_file, entity_to_types_file, whitelist_types_file = create_custom_mappings(
-        entity_to_name, entity_to_aliases, entity_to_types, custom_mappings_dir
+    entity_to_name_file, entity_to_types_file, entity_to_descriptions_file, whitelist_types_file = create_custom_mappings(
+        entity_to_name, entity_to_aliases, entity_to_types, entity_to_def, custom_mappings_dir
     )
     
     # Create database files
