@@ -69,7 +69,12 @@ class GraphLinker(AbstractEntityLinker):
         # - Hyperlink candidates for popular mention->entity mappings
         # - Sitelink counts for popularity-based scoring
         try:
-            self.entity_db.load_entity_names()
+            # Only load entity names if not already loaded (e.g., by custom KB)
+            if not self.entity_db.entity_name_db:
+                self.entity_db.load_entity_names()
+            # Ensure name_to_entities_db is loaded for get_candidates()
+            if not self.entity_db.name_to_entities_db:
+                self.entity_db.load_name_to_entities()
             self.entity_db.load_alias_to_entities()
             self.entity_db.load_hyperlink_to_most_popular_candidates()
             self.entity_db.load_sitelink_counts()

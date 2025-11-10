@@ -176,6 +176,13 @@ class EntityDatabase:
     def load_custom_entity_names(self, filename: str):
         if not self.entity_name_db:
             self.entity_name_db = EntityDatabaseReader.get_entity_name_mapping(filename)
+            # Build reverse mapping (name -> entities) for get_candidates()
+            self.name_to_entities_db = {}
+            for entity_id, name in self.entity_name_db.items():
+                if name not in self.name_to_entities_db:
+                    self.name_to_entities_db[name] = set()
+                self.name_to_entities_db[name].add(entity_id)
+            logger.info(f"Built name_to_entities_db with {len(self.name_to_entities_db)} names")
         else:
             logger.info("Entity name mapping already loaded.")
 
