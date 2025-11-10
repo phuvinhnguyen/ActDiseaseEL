@@ -122,8 +122,11 @@ class GraphLinker(AbstractEntityLinker):
                 prompt = f"""
 TEXT: {text}
 
+CONTEXT: You are a researcher looking for historical entities related to healthcare so that following experts can find the relation between those terms with modern knowledge.
+
 INSTRUCTIONS:
-1. Identify all important entities (people, organizations, locations, products, events, etc.)
+1. Identify all important entities (people, organizations, locations, products, events, etc.) that are relevant to healthcare.
+2. Only include entities that are relevant to healthcare.
 2. For each entity, provide the entity text and a short context window around it
 3. Identify relationships between entities
 
