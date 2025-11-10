@@ -270,6 +270,7 @@ class EntityDatabase:
 
     def get_candidates(self, alias: str) -> Set[str]:
         entity_ids = set()
+        # Try exact match first
         if alias in self.name_to_entities_db:
             entity_ids = entity_ids.union(self.name_to_entities_db[alias])
         if alias in self.alias_to_entities_db:
@@ -278,6 +279,19 @@ class EntityDatabase:
             entity_ids = entity_ids.union(self.family_name_aliases[alias])
         if alias in self.link_aliases:
             entity_ids = entity_ids.union(self.link_aliases[alias])
+        
+        # Try case-insensitive match if exact match found nothing
+        if not entity_ids:
+            alias_lower = alias.lower()
+            if alias_lower in self.name_to_entities_db:
+                entity_ids = entity_ids.union(self.name_to_entities_db[alias_lower])
+            if alias_lower in self.alias_to_entities_db:
+                entity_ids = entity_ids.union(self.alias_to_entities_db[alias_lower])
+            if alias_lower in self.family_name_aliases:
+                entity_ids = entity_ids.union(self.family_name_aliases[alias_lower])
+            if alias_lower in self.link_aliases:
+                entity_ids = entity_ids.union(self.link_aliases[alias_lower])
+        
         return entity_ids
 
     def contains_alias(self, alias: str) -> bool:
