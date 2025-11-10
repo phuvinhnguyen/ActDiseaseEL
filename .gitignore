@@ -8,3 +8,4 @@ wikidata-types/index/*
 !wikidata-types/index/.gitkeep
 wikidata-types/.*
 evaluation-results/*
+/logs/
