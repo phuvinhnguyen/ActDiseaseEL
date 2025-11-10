@@ -306,13 +306,15 @@ Make each description distinct and informative.
             # Convert to dict format with title and description
             for entity_id in candidates:
                 entity_name = self.entity_db.get_entity_name(entity_id)
-                if entity_name:
+                if entity_name and entity_name != "Unknown":
                     all_candidates.append({
                         'id': entity_id,
                         'title': entity_name,
                         'description': f"Entity: {entity_name}",
                         'score': self.entity_db.get_sitelink_count(entity_id)
                     })
+                else:
+                    logger.debug(f"  Skipping candidate {entity_id}: entity_name={entity_name}")
         
         # Remove duplicates and sort by score
         seen_ids = set()
@@ -325,6 +327,19 @@ Make each description distinct and informative.
                     break
         
         node.candidates = unique_candidates
+        if not unique_candidates:
+            logger.warning(f"No candidates found for entity '{node.entity_text}' with queries: {search_queries}")
+            # Debug: check what get_candidates returns
+            for query in search_queries:
+                if len(query) >= 2:
+                    candidates = self.entity_db.get_candidates(query)
+                    logger.warning(f"  Query '{query}' -> {len(candidates)} candidates from get_candidates()")
+                    if candidates:
+                        sample_id = list(candidates)[0]
+                        entity_name = self.entity_db.get_entity_name(sample_id)
+                        logger.warning(f"    Sample candidate: {sample_id} -> name={entity_name}")
+        else:
+            logger.debug(f"Found {len(unique_candidates)} candidates for entity '{node.entity_text}'")
     
     def _select_best_candidate(self, node: GraphNode) -> Optional[str]:
         """Select best candidate using LLM ranking"""
