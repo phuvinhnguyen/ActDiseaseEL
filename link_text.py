@@ -105,7 +105,8 @@ def main():
                            args.linker_config,
                            coref_linker=args.coreference_linker,
                            min_score=args.minimum_score,
-                           type_mapping_file=args.type_mapping)
+                           type_mapping_file=args.type_mapping,
+                           custom_kb=args.custom_kb)
         logger.info("Start linking with a single process.")
         start = time.time()
         for i, tupl in enumerate(iterator):
@@ -153,6 +154,8 @@ if __name__ == "__main__":
                         help="For pure prior linker: Map predicted entities to types using the given mapping.")
     parser.add_argument("-m", "--multiprocessing", type=int, default=1,
                         help="Number of processes to use. Default is 1, i.e. no multiprocessing.")
+    parser.add_argument("-c", "--custom_kb", action="store_true",
+                        help="Use custom knowledge base instead of Wikipedia entities.")
 
     args = parser.parse_args()
 
@@ -168,7 +171,8 @@ if __name__ == "__main__":
               "linker_config": args.linker_config,
               "coreference_linker": args.coreference_linker,
               "minimum_score": args.minimum_score,
-              "type_mapping": args.type_mapping}
+              "type_mapping": args.type_mapping,
+              "custom_kb": args.custom_kb}
     with open(settings.TMP_FORKSERVER_CONFIG_FILE, "w", encoding="utf8") as config_file:
         json.dump(config, config_file)
 

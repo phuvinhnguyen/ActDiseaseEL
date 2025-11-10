@@ -12,4 +12,5 @@ else:
                                    config["linker_config"],
                                    coref_linker=config["coreference_linker"],
                                    min_score=config["minimum_score"],
-                                   type_mapping_file=config["type_mapping"])
+                                   type_mapping_file=config["type_mapping"],
+                                   custom_kb=config.get("custom_kb", False))
