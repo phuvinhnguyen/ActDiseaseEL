@@ -18,6 +18,8 @@ class Linkers(Enum):
     GRAPH_LLM = "graph-llm"
     RANKING_LLM = "ranking-llm"
     ONENET_LLM = "onenet-llm"
+    GENERAL_GRAPH_LLM = "general-graph-llm"
+    GENERAL_ONENET_LLM = "general-onenet-llm"
     RANDOM = "random"
     NONE = "none"
 

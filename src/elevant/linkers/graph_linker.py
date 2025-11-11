@@ -74,7 +74,7 @@ class GraphLinker(AbstractEntityLinker):
         # Ensure required entity databases are loaded for candidate search and scoring
         # - Names for titles and alias aggregation
         # - Aliases and name-to-entity mappings for candidate generation
-        # - Hyperlink candidates for popular mention->entity mappings
+        # - Hyperlink candidates for popular mention->entity mappings (Wikipedia only)
         # - Sitelink counts for popularity-based scoring
         try:
             # Only load entity names if not already loaded (e.g., by custom KB)
@@ -84,7 +84,14 @@ class GraphLinker(AbstractEntityLinker):
             if not self.entity_db.name_to_entities_db:
                 self.entity_db.load_name_to_entities()
             self.entity_db.load_alias_to_entities()
-            self.entity_db.load_hyperlink_to_most_popular_candidates()
+            
+            # Try to load hyperlink candidates (Wikipedia-specific, may not exist for custom KB)
+            try:
+                self.entity_db.load_hyperlink_to_most_popular_candidates()
+            except Exception as hyperlink_error:
+                # This is expected for custom knowledge bases
+                logger.debug(f"Hyperlink mappings not available (expected for custom KB): {hyperlink_error}")
+            
             self.entity_db.load_sitelink_counts()
         except Exception as e:
             logger.warning(f"Error while loading entity databases: {e}")
@@ -155,66 +162,65 @@ class GraphLinker(AbstractEntityLinker):
             try:
                 # Use LLM to detect additional entities and relations
                 prompt = f"""
-TEXT: {text}
+KNOWLEDGE BASE: Human Disease Ontology (DOID)
+TASK: Medical Entity Detection for Disease Linking
 
-CONTEXT: You are a medical ontology expert working with the Human Disease Ontology (DOID). DOID is a comprehensive hierarchical controlled vocabulary for human diseases. Your task is to extract ONLY entities that can be mapped to DOID entries.
+=== ABOUT DOID ===
+The Human Disease Ontology (DOID) is a medical knowledge base containing:
+• Diseases: diabetes, cancer, influenza, tuberculosis, malaria
+• Medical conditions: hypertension, asthma, arthritis, obesity
+• Syndromes: Down syndrome, metabolic syndrome, SARS
+• Infectious diseases: COVID-19, HIV, hepatitis, pneumonia
+• Genetic disorders: cystic fibrosis, hemophilia, sickle cell disease
+• Mental health: depression, schizophrenia, anxiety disorders
+• Allergies: peanut allergy, drug allergies, food allergies
+• Cancers: breast cancer, lung cancer, leukemia, lymphoma
 
-WHAT IS DOID?
-The Human Disease Ontology (DOID) contains:
-- Disease names (e.g., "type 2 diabetes mellitus", "breast cancer", "Alzheimer's disease")
-- Medical conditions (e.g., "hypertension", "asthma", "arthritis")
-- Syndromes (e.g., "Down syndrome", "metabolic syndrome")
-- Infectious diseases (e.g., "tuberculosis", "malaria", "COVID-19")
-- Genetic disorders (e.g., "cystic fibrosis", "sickle cell anemia")
-- Mental health conditions (e.g., "depression", "schizophrenia", "anxiety disorder")
-- Allergies and hypersensitivities (e.g., "peanut allergy", "drug allergy")
-- Cancers and tumors (e.g., "angiosarcoma", "lymphoma", "glioblastoma")
+DOID does NOT contain:
+✗ People (doctors, patients, researchers)
+✗ Places (hospitals, clinics, cities, countries)
+✗ Organizations (WHO, medical institutions)
+✗ Dates, times, numbers, measurements
+✗ Anatomical parts alone (heart, liver, lung) - only with disease context
+✗ Isolated symptoms (fever, pain, cough) - only as defined conditions
+✗ Medical procedures or drugs alone
+✗ Legal or administrative terms
 
-INSTRUCTIONS:
-1. Extract ONLY entities that are likely DOID entries:
-   ✓ Disease names (specific and general)
-   ✓ Medical conditions and disorders
-   ✓ Syndromes and symptom complexes
-   ✓ Infectious diseases
-   ✓ Allergies and hypersensitivity conditions
-   ✓ Cancer types and tumors
-   ✓ Genetic/hereditary conditions
-   ✓ Mental health disorders
-   
-2. EXCLUDE non-disease entities:
-   ✗ People names (e.g., "Dr. Smith", "THOMSON")
-   ✗ Locations/Places (e.g., "Kew Gardens", "Surrey", "Leven Park")
-   ✗ Organizations (e.g., "WHO", "hospital names")
-   ✗ Dates and times (e.g., "1891", "37 years")
-   ✗ Numbers and measurements
-   ✗ Anatomical parts UNLESS part of disease name (e.g., "heart" alone is ✗, but "heart disease" is ✓)
-   ✗ Symptoms UNLESS they are a defined condition (e.g., "fever" alone is ✗, but "rheumatic fever" is ✓)
-   ✗ Legal/regulatory terms (e.g., "Dangerous Drugs Acts")
-   ✗ General medical procedures (e.g., "surgery", "vaccination" without disease context)
+=== YOUR TASK ===
+Extract healthcare terms and disease mentions from the text that can be linked to DOID entries.
 
-3. Prefer complete disease names:
-   - Good: "type 2 diabetes mellitus", "acute bronchitis", "peanut allergy"
-   - Avoid: "diabetes" alone if text says "diabetes mellitus"
+TEXT:
+{text}
 
-OUTPUT FORMAT:
-For each DOID-likely entity:
-ENTITY: [entity_text] | [context_window]
+=== WHAT TO EXTRACT ===
+Focus on disease-related entities:
+1. Complete disease names: "type 2 diabetes mellitus", "rheumatoid arthritis"
+2. Medical conditions: "chronic kidney disease", "heart failure"
+3. Infections: "streptococcal infection", "viral pneumonia"
+4. Syndromes: "irritable bowel syndrome", "carpal tunnel syndrome"
+5. Cancers with specificity: "stage II breast cancer", "non-small cell lung cancer"
+6. Mental health conditions: "major depressive disorder", "bipolar disorder"
+7. Allergic conditions: "penicillin allergy", "latex hypersensitivity"
 
-For disease relationships:
-RELATION: [entity1_text] -> [entity2_text] | [relation_type]
+=== OUTPUT FORMAT ===
+For each healthcare entity found:
+ENTITY: [exact_text_from_document] | [5-10 words of context]
 
-EXAMPLES:
-ENTITY: type 2 diabetes mellitus | diagnosed with type 2 diabetes mellitus and hypertension
-ENTITY: hypertension | diabetes mellitus and hypertension in elderly patients
-ENTITY: aspirin allergy | patient developed aspirin allergy after treatment
-ENTITY: angiosarcoma | rare vascular cancer angiosarcoma was detected
+For relationships between diseases:
+RELATION: [disease1] -> [disease2] | [relationship_type]
 
-IMPORTANT:
-- Match text exactly as it appears
-- Context should be 5-10 words surrounding the entity
-- ONLY output entities mappable to DOID (diseases, conditions, syndromes)
-- If no DOID-relevant entities found, output nothing
-- No explanations, only ENTITY and RELATION lines
+=== EXAMPLES ===
+ENTITY: type 2 diabetes mellitus | Patient diagnosed with type 2 diabetes mellitus in 2020
+ENTITY: hypertension | comorbid conditions include hypertension and hyperlipidemia
+ENTITY: seasonal allergies | History of seasonal allergies and asthma
+RELATION: diabetes mellitus -> diabetic neuropathy | complication
+
+=== REQUIREMENTS ===
+• Extract only disease/condition names, not people, places, or organizations
+• Use exact text as it appears in the document
+• Provide 5-10 words of surrounding context
+• If no healthcare entities found, output nothing
+• No explanations or additional text
 """
                 
                 messages = [{"role": "user", "content": prompt}]
@@ -307,36 +313,47 @@ IMPORTANT:
         
         try:
             prompt = f"""
-ENTITY: "{node.entity_text}"
-CONTEXT: "...{node.context_left} {node.entity_text} {node.context_right}..."
+KNOWLEDGE BASE: Human Disease Ontology (DOID)
+TASK: Generate Medical Search Queries
 
-TASK: Generate {self.N_DESCRIPTIONS} different search queries to find this entity in the Human Disease Ontology (DOID). Each description should help match this entity to a disease, medical condition, or health-related term in DOID.
+=== ENTITY TO SEARCH ===
+Entity: "{node.entity_text}"
+Context: "...{node.context_left} {node.entity_text} {node.context_right}..."
 
-CONTEXT: DOID (Human Disease Ontology) contains diseases, medical conditions, syndromes, infections, allergies, and health disorders. Your descriptions should help find the correct DOID entry.
+=== YOUR TASK ===
+Generate {self.N_DESCRIPTIONS} different medical search queries to find this entity in DOID.
+DOID contains diseases, syndromes, infections, genetic disorders, cancers, and medical conditions.
 
-INSTRUCTIONS:
-1. Think about what type of disease/condition this might be
-2. Consider medical terminology and common names
-3. Include relevant category terms (e.g., "diabetes", "cancer", "syndrome", "disease", "disorder")
-4. Be specific but also consider variations
+=== SEARCH QUERY GUIDELINES ===
+1. Medical terminology (formal names): "diabetes mellitus", "myocardial infarction"
+2. Common names (lay terms): "heart attack", "sugar disease"
+3. Specific variants: "type 2 diabetes", "non-insulin-dependent diabetes"
+4. Category + specificity: "chronic kidney disease", "bacterial pneumonia"
+5. Include disease type when relevant: "syndrome", "disorder", "disease", "cancer"
 
-OUTPUT FORMAT:
-DESCRIPTION 1: [medical description or search term]
-DESCRIPTION 2: [alternative medical term or category]
-DESCRIPTION 3: [related disease terminology]
-
-EXAMPLES:
-For entity "type 2 diabetes":
+=== EXAMPLES ===
+Entity: "Type 2 Diabetes"
 DESCRIPTION 1: type 2 diabetes mellitus
-DESCRIPTION 2: non-insulin-dependent diabetes
-DESCRIPTION 3: adult-onset diabetes
+DESCRIPTION 2: diabetes mellitus type 2
+DESCRIPTION 3: non-insulin-dependent diabetes mellitus
 
-For entity "peanut allergy":
-DESCRIPTION 1: peanut allergy
-DESCRIPTION 2: peanut hypersensitivity
-DESCRIPTION 3: legume allergy peanut
+Entity: "breast cancer"
+DESCRIPTION 1: breast carcinoma
+DESCRIPTION 2: malignant breast neoplasm
+DESCRIPTION 3: breast cancer
 
-Make each description medically relevant and helpful for finding the correct DOID entry.
+Entity: "food allergy"
+DESCRIPTION 1: food allergy
+DESCRIPTION 2: food hypersensitivity
+DESCRIPTION 3: allergic reaction to food
+
+=== OUTPUT FORMAT ===
+Generate {self.N_DESCRIPTIONS} search queries:
+DESCRIPTION 1: [primary medical term]
+DESCRIPTION 2: [alternative medical term or synonym]
+DESCRIPTION 3: [related term or specification]
+
+Focus on medical terminology that would appear in DOID.
 """
             
             messages = [{"role": "user", "content": prompt}]
@@ -375,10 +392,94 @@ Make each description medically relevant and helpful for finding the correct DOI
         
         return descriptions[:self.N_DESCRIPTIONS]
     
+    def _normalize_entity_name(self, entity_text: str) -> List[str]:
+        """
+        Generate normalized variations of entity name for better candidate matching.
+        Handles different languages, naming conventions, and common variations.
+        """
+        normalized_names = [entity_text]  # Always include original
+        
+        # Basic normalization
+        entity_lower = entity_text.lower().strip()
+        if entity_lower != entity_text:
+            normalized_names.append(entity_lower)
+        
+        # Remove common punctuation and special characters
+        entity_cleaned = re.sub(r'[^\w\s-]', ' ', entity_text)
+        entity_cleaned = ' '.join(entity_cleaned.split())  # Clean whitespace
+        if entity_cleaned != entity_text:
+            normalized_names.append(entity_cleaned)
+        
+        # Try common medical term variations
+        # Example: "Type 2 Diabetes" -> "type 2 diabetes mellitus", "diabetes mellitus type 2"
+        if any(term in entity_lower for term in ['diabetes', 'cancer', 'syndrome', 'disease', 'disorder']):
+            # Add "disease" suffix if not present
+            if not any(suffix in entity_lower for suffix in ['disease', 'syndrome', 'disorder', 'cancer']):
+                normalized_names.append(f"{entity_text} disease")
+            
+            # Try reordering for "Type X" patterns
+            type_match = re.match(r'(type\s+\d+)\s+(.*)', entity_lower, re.IGNORECASE)
+            if type_match:
+                type_part, rest = type_match.groups()
+                normalized_names.append(f"{rest} {type_part}")
+        
+        # Try LLM-based name normalization if available
+        if self.llm_client and (self.llm_client.model or self.llm_client.gemini_model):
+            try:
+                prompt = f"""
+ENTITY: "{entity_text}"
+
+TASK: Suggest 2-3 alternative names or variations for this entity that might appear in a medical ontology.
+
+INSTRUCTIONS:
+1. Consider medical terminology variations
+2. Include both formal and common names
+3. Consider language variations (Latin, English)
+4. Keep it short - just the alternative names
+
+OUTPUT FORMAT:
+ALT 1: [alternative name]
+ALT 2: [alternative name]
+ALT 3: [alternative name]
+
+Example for "Type 2 Diabetes":
+ALT 1: type 2 diabetes mellitus
+ALT 2: diabetes mellitus type 2
+ALT 3: non-insulin-dependent diabetes
+"""
+                messages = [{"role": "user", "content": prompt}]
+                response = self.llm_client.call(messages, max_tokens=128)
+                
+                # Parse alternative names
+                for line in response.strip().split('\n'):
+                    if line.strip().startswith('ALT'):
+                        match = re.match(r'ALT\s+\d+:\s*(.+)', line.strip(), re.IGNORECASE)
+                        if match:
+                            alt_name = match.group(1).strip()
+                            if alt_name and len(alt_name) > 2:
+                                normalized_names.append(alt_name)
+            except Exception as e:
+                logger.debug(f"Error in LLM name normalization: {e}")
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_names = []
+        for name in normalized_names:
+            name_lower = name.lower()
+            if name_lower not in seen:
+                seen.add(name_lower)
+                unique_names.append(name)
+        
+        logger.debug(f"Normalized '{entity_text}' to {len(unique_names)} variations: {unique_names[:3]}...")
+        return unique_names
+    
     def _search_candidates(self, node: GraphNode):
         """Search for entity candidates"""
-        # Use entity text and descriptions to search
-        search_queries = [node.entity_text] + node.descriptions
+        # Normalize entity name to handle language/naming variations
+        normalized_names = self._normalize_entity_name(node.entity_text)
+        
+        # Use normalized names, original text, and descriptions to search
+        search_queries = normalized_names + node.descriptions
         all_candidates = []
         
         for query in search_queries:
@@ -457,35 +558,49 @@ Make each description medically relevant and helpful for finding the correct DOI
         try:
             # Use LLM to rank candidates
             prompt = f"""
-ENTITY: "{node.entity_text}"
-CONTEXT: "...{node.context_left} {node.entity_text} {node.context_right}..."
+KNOWLEDGE BASE: Human Disease Ontology (DOID)
+TASK: Medical Entity Disambiguation
 
-TASK: Select the best matching disease/condition from the Human Disease Ontology (DOID) for the entity above.
+=== ENTITY MENTION ===
+Mention: "{node.entity_text}"
+Clinical Context: "...{node.context_left} {node.entity_text} {node.context_right}..."
 
-CANDIDATES FROM DOID:
+=== CANDIDATE DISEASES FROM DOID ===
 """
             
             for i, candidate in enumerate(node.candidates[:self.T_MAX]):
                 prompt += f"{i+1}. {candidate['title']} - {candidate['description'][:150]}\n"
             
             prompt += f"""
-INSTRUCTIONS:
-1. Consider the medical context and exact wording
-2. Match based on disease terminology and specificity
-3. Prefer exact medical terminology matches
-4. Consider disease hierarchy (specific vs. general conditions)
-5. If the entity mentions a specific subtype, choose the specific DOID entry
+=== YOUR TASK ===
+Select the DOID disease entry that best matches the entity mention based on the clinical context.
 
-RANKING CRITERIA:
-- Exact match of disease name (highest priority)
-- Semantic similarity in medical terminology
-- Correct level of specificity (e.g., "type 2 diabetes mellitus" vs. "diabetes mellitus")
-- Context appropriateness
+=== SELECTION CRITERIA ===
+1. **Exact Terminology Match**: Does the candidate name match the medical term used?
+   Example: "type 2 diabetes mellitus" matches better than general "diabetes"
 
-OUTPUT FORMAT:
+2. **Specificity Level**: Is the candidate at the right level of detail?
+   Example: "bacterial pneumonia" vs. "pneumonia" vs. "respiratory infection"
+
+3. **Clinical Context**: Does the candidate fit the medical context provided?
+   Example: "chronic" vs. "acute" forms, "juvenile" vs. "adult-onset"
+
+4. **Medical Synonyms**: Consider alternative medical terminology
+   Example: "myocardial infarction" = "heart attack"
+
+=== DISEASE HIERARCHY EXAMPLE ===
+Respiratory Disease (general)
+  ├─ Pneumonia (more specific)
+  │   ├─ Bacterial pneumonia (most specific)
+  │   └─ Viral pneumonia (most specific)
+  └─ Bronchitis
+
+Choose the most specific match that fits the context.
+
+=== OUTPUT FORMAT ===
 BEST: [number]
 
-Only output the number (1-{min(self.T_MAX, len(node.candidates))}) of the best matching DOID candidate.
+Output only the number (1-{min(self.T_MAX, len(node.candidates))}) of the best DOID candidate.
 """
             
             messages = [{"role": "user", "content": prompt}]

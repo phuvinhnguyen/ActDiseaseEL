@@ -1,0 +1,10 @@
+{
+  "linker_name": "General Graph LLM",
+  "llm_model_path": "moonshotai/Kimi-K2-Thinking",
+  "n_descriptions": 3,
+  "k_search": 5,
+  "t_max": 5,
+  "high_confidence_threshold": 0.9,
+  "experiment_description": "General graph-based entity linking using transformers LLM. For Wikipedia/Wikidata entities (not domain-specific)."
+}
+

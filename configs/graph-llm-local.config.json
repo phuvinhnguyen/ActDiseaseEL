@@ -1,6 +1,6 @@
 {
   "linker_name": "Graph LLM Local",
-  "llm_model_path": "Qwen/Qwen2.5-0.5B-Instruct",
+  "llm_model_path": "moonshotai/Kimi-K2-Thinking",
   "n_descriptions": 3,
   "k_search": 5,
   "t_max": 5,

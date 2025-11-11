@@ -244,6 +244,22 @@ class LinkingSystem:
                                         MappingName.NAME_TO_ENTITY_ID,
                                         MappingName.SITELINKS})
             self.linker = OneNetLinker(self.entity_db, self.linker_config)
+        elif linker_type == Linkers.GENERAL_GRAPH_LLM.value:
+            from elevant.linkers.general_graph_linker import GraphLinker
+            self.load_missing_mappings({MappingName.WIKIDATA_ALIASES,
+                                        MappingName.FAMILY_NAME_ALIASES,
+                                        MappingName.HYPERLINK_TO_MOST_POPULAR_CANDIDATES,
+                                        MappingName.NAME_TO_ENTITY_ID,
+                                        MappingName.SITELINKS})
+            self.linker = GraphLinker(self.entity_db, self.linker_config)
+        elif linker_type == Linkers.GENERAL_ONENET_LLM.value:
+            from elevant.linkers.general_onenet_linker import OneNetLinker
+            self.load_missing_mappings({MappingName.WIKIDATA_ALIASES,
+                                        MappingName.FAMILY_NAME_ALIASES,
+                                        MappingName.HYPERLINK_TO_MOST_POPULAR_CANDIDATES,
+                                        MappingName.NAME_TO_ENTITY_ID,
+                                        MappingName.SITELINKS})
+            self.linker = OneNetLinker(self.entity_db, self.linker_config)
         elif linker_type == Linkers.RANDOM.value:
             from elevant.linkers.random_linker import RandomLinker
             self.linker = RandomLinker(self.linker_config)

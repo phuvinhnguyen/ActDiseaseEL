@@ -115,29 +115,56 @@ class GraphLinker(AbstractEntityLinker):
             try:
                 # Use LLM to detect additional entities and relations
                 prompt = f"""
-TEXT: {text}
+KNOWLEDGE BASE: Wikipedia/Wikidata
+TASK: General Entity Detection for Knowledge Base Linking
 
-INSTRUCTIONS:
-1. Identify all important entities (people, organizations, locations, products, events, etc.)
-2. For each entity, provide the entity text and a short context window around it
-3. Identify relationships between entities
+=== ABOUT WIKIPEDIA/WIKIDATA ===
+Wikipedia/Wikidata contains encyclopedic entities including:
+• People: politicians, celebrities, historical figures, scientists
+• Organizations: companies, institutions, governments, NGOs
+• Locations: countries, cities, landmarks, geographical features
+• Products: brands, technologies, devices, software
+• Events: historical events, conferences, disasters
+• Concepts: theories, movements, ideologies
+• Works: books, movies, songs, artworks
+• Species: animals, plants, organisms
 
-OUTPUT FORMAT:
-For each entity, output:
-ENTITY: [entity_text] | [context_window]
+=== YOUR TASK ===
+Extract ALL notable entities from the text that could be linked to Wikipedia.
 
-For each relation, output:
-RELATION: [entity1_text] -> [entity2_text] | [relation_type]
+TEXT:
+{text}
 
-Example:
-ENTITY: Apple | technology company Apple Inc. is headquartered
-ENTITY: California | headquartered in Cupertino, California
-RELATION: Apple -> California | located_in
+=== WHAT TO EXTRACT ===
+1. **People**: "Barack Obama", "Marie Curie", "Elon Musk"
+2. **Organizations**: "Google", "United Nations", "Harvard University"
+3. **Locations**: "Paris", "Mount Everest", "Amazon River"
+4. **Products/Technologies**: "iPhone", "Tesla Model S", "Linux"
+5. **Events**: "World War II", "Olympic Games", "Renaissance"
+6. **Works**: "Harry Potter", "Mona Lisa", "Bohemian Rhapsody"
+7. **Concepts**: "Democracy", "Artificial Intelligence", "Climate Change"
 
-IMPORTANT:
-- Entity text must match exactly what appears in the text
-- Context window should be 5-10 words around the entity
-- Only output entities and relations, no other text
+=== OUTPUT FORMAT ===
+For each entity:
+ENTITY: [exact_text_from_document] | [5-10 words of context]
+
+For relationships:
+RELATION: [entity1] -> [entity2] | [relationship_type]
+
+=== EXAMPLES ===
+ENTITY: Apple Inc. | technology company Apple Inc. is headquartered in
+ENTITY: Cupertino | Apple Inc. is headquartered in Cupertino, California
+ENTITY: Steve Jobs | co-founder Steve Jobs introduced the iPhone in
+RELATION: Apple Inc. -> Cupertino | headquartered_in
+RELATION: Steve Jobs -> Apple Inc. | founder_of
+
+=== REQUIREMENTS ===
+• Extract notable entities that would have Wikipedia articles
+• Use exact text as it appears in the document
+• Provide 5-10 words of surrounding context
+• Include entities of all types (not just one category)
+• If no notable entities found, output nothing
+• No explanations or additional text
 """
                 
                 messages = [{"role": "user", "content": prompt}]
@@ -230,23 +257,46 @@ IMPORTANT:
         
         try:
             prompt = f"""
-ENTITY: "{node.entity_text}"
-CONTEXT: "...{node.context_left} {node.entity_text} {node.context_right}..."
+KNOWLEDGE BASE: Wikipedia/Wikidata
+TASK: Generate Entity Descriptions for Search
 
-INSTRUCTIONS:
-Generate {self.N_DESCRIPTIONS} different descriptions for this entity. Each description should be a short phrase that helps identify what this entity is.
+=== ENTITY TO SEARCH ===
+Entity: "{node.entity_text}"
+Context: "...{node.context_left} {node.entity_text} {node.context_right}..."
 
-OUTPUT FORMAT:
-DESCRIPTION 1: [description1]
-DESCRIPTION 2: [description2]
-DESCRIPTION 3: [description3]
+=== YOUR TASK ===
+Generate {self.N_DESCRIPTIONS} different descriptions or alternative names for this entity to help find it in Wikipedia.
 
-Example:
-DESCRIPTION 1: A technology company
-DESCRIPTION 2: A fruit company  
-DESCRIPTION 3: A multinational corporation
+=== DESCRIPTION TYPES ===
+1. **Entity Type**: "American politician", "software company", "European capital"
+2. **Alternative Names**: "USA" for "United States", "Big Apple" for "New York"
+3. **Key Characteristics**: "social media platform", "electric vehicle manufacturer"
+4. **Historical Context**: "Renaissance painter", "20th century physicist"
+5. **Category**: "tech giant", "Nobel laureate", "World Heritage Site"
 
-Make each description distinct and informative.
+=== EXAMPLES ===
+Entity: "Apple"
+DESCRIPTION 1: American technology company
+DESCRIPTION 2: iPhone and Mac manufacturer
+DESCRIPTION 3: Silicon Valley tech giant
+
+Entity: "Paris"
+DESCRIPTION 1: Capital of France
+DESCRIPTION 2: European city on the Seine
+DESCRIPTION 3: City of Light
+
+Entity: "Einstein"
+DESCRIPTION 1: Theoretical physicist
+DESCRIPTION 2: Theory of relativity scientist
+DESCRIPTION 3: Nobel Prize winner in Physics
+
+=== OUTPUT FORMAT ===
+Generate {self.N_DESCRIPTIONS} descriptions:
+DESCRIPTION 1: [primary description or type]
+DESCRIPTION 2: [alternative name or characteristic]
+DESCRIPTION 3: [related description or category]
+
+Make descriptions informative and diverse.
 """
             
             messages = [{"role": "user", "content": prompt}]
@@ -337,23 +387,46 @@ Make each description distinct and informative.
         try:
             # Use LLM to rank candidates
             prompt = f"""
-ENTITY: "{node.entity_text}"
-CONTEXT: "...{node.context_left} {node.entity_text} {node.context_right}..."
+KNOWLEDGE BASE: Wikipedia/Wikidata
+TASK: Entity Disambiguation
 
-CANDIDATES:
+=== ENTITY MENTION ===
+Mention: "{node.entity_text}"
+Context: "...{node.context_left} {node.entity_text} {node.context_right}..."
+
+=== CANDIDATE ENTITIES FROM WIKIPEDIA ===
 """
             
             for i, candidate in enumerate(node.candidates[:self.T_MAX]):
                 prompt += f"{i+1}. {candidate['title']} - {candidate['description'][:150]}\n"
             
             prompt += f"""
-INSTRUCTIONS:
-Select the best candidate for the entity above.
+=== YOUR TASK ===
+Select the Wikipedia entity that best matches the mention based on the context.
 
-OUTPUT FORMAT:
+=== SELECTION CRITERIA ===
+1. **Name Match**: Does the candidate name match or closely relate to the mention?
+2. **Context Fit**: Does the candidate fit the context (topic, domain, timeframe)?
+3. **Entity Type**: Is it the right type (person vs. place vs. organization)?
+4. **Prominence**: Is this the most well-known entity with this name?
+
+=== DISAMBIGUATION EXAMPLES ===
+Mention: "Apple" in context "...bought the latest Apple iPhone..."
+✓ Best: Apple Inc. (technology company)
+✗ Wrong: Apple (fruit), Apple Records (music label)
+
+Mention: "Paris" in context "...visited Paris during the summer..."
+✓ Best: Paris (capital of France)
+✗ Wrong: Paris Hilton, Paris, Texas
+
+Mention: "Washington" in context "...met with President Washington..."
+✓ Best: George Washington (1st US President)
+✗ Wrong: Washington, D.C., Washington State
+
+=== OUTPUT FORMAT ===
 BEST: [number]
 
-Only output the number of the best candidate.
+Output only the number (1-{min(self.T_MAX, len(node.candidates))}) of the best Wikipedia candidate.
 """
             
             messages = [{"role": "user", "content": prompt}]

@@ -1,9 +1,7 @@
 {
-  "linker_name": "OneNet LLM",
-  "llm_model_path": "Qwen/Qwen2.5-7B-Instruct",
+  "linker_name": "OneNet LLM Local",
+  "llm_model_path": "moonshotai/Kimi-K2-Thinking",
   "top_k": 5,
   "shuffle_candidates": true,
-  "experiment_description": "OneNet-style entity linking using transformers LLM. Uses OneNet-style prompts with shuffled candidates for entity selection."
+  "experiment_description": "OneNet-style entity linking using Gemini API for custom KB (DOID). Uses entity mention disambiguation with context."
 }
-
-

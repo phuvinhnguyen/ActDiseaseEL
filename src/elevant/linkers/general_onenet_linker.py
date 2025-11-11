@@ -45,35 +45,11 @@ class OneNetLinker(AbstractEntityLinker):
         model_path = config.get("llm_model_path", None)
         self.llm_client = LLMClient(model_path) if model_path else None
         
-        # For Gemini API, check if model is available
-        if self.llm_client and self.llm_client.use_gemini:
-            if not self.llm_client.gemini_model:
-                logger.warning("Gemini model not initialized. LLM features will be disabled.")
-                self.llm_client = None
-            else:
-                logger.info(f"Gemini API initialized with model: {model_path}")
-        
-        # Ensure required entity databases are loaded for candidate search and scoring
-        # - Names for titles and alias aggregation
-        # - Aliases and name-to-entity mappings for candidate generation
-        # - Hyperlink candidates for popular mention->entity mappings (Wikipedia only)
-        # - Sitelink counts for popularity-based scoring
+        # Ensure required entity databases are loaded
         try:
-            # Only load entity names if not already loaded (e.g., by custom KB)
-            if not self.entity_db.entity_name_db:
-                self.entity_db.load_entity_names()
-            # Ensure name_to_entities_db is loaded for get_candidates()
-            if not self.entity_db.name_to_entities_db:
-                self.entity_db.load_name_to_entities()
+            self.entity_db.load_entity_names()
             self.entity_db.load_alias_to_entities()
-            
-            # Try to load hyperlink candidates (Wikipedia-specific, may not exist for custom KB)
-            try:
-                self.entity_db.load_hyperlink_to_most_popular_candidates()
-            except Exception as hyperlink_error:
-                # This is expected for custom knowledge bases
-                logger.debug(f"Hyperlink mappings not available (expected for custom KB): {hyperlink_error}")
-            
+            self.entity_db.load_hyperlink_to_most_popular_candidates()
             self.entity_db.load_sitelink_counts()
         except Exception as e:
             logger.warning(f"Error while loading entity databases: {e}")
@@ -89,40 +65,13 @@ class OneNetLinker(AbstractEntityLinker):
         """Simple entity detection using spaCy"""
         entities = []
         
-        # Non-healthcare entity labels to filter out for DOID
-        NON_HEALTHCARE_LABELS = {
-            "GPE",      # Geopolitical entity (countries, cities, states)
-            "LOC",      # Location (non-geopolitical locations)
-            "PERSON",   # People
-            "ORG",      # Organizations (unless healthcare-related, but hard to filter)
-            "DATE",     # Dates
-            "TIME",     # Times
-            "CARDINAL", # Numbers
-            "ORDINAL",  # Ordinal numbers
-            "MONEY",    # Money
-            "QUANTITY", # Quantities
-            "PERCENT",  # Percentages
-            "EVENT",    # Events
-            "FAC",      # Facilities (buildings, airports, etc.)
-        }
-        
         for ent in doc.ents:
             if ent.label_ in NER_IGNORE_TAGS:
-                continue
-            # Filter out non-healthcare entities for custom KB
-            if ent.label_ in NON_HEALTHCARE_LABELS:
                 continue
             span = (ent.start_char, ent.end_char)
             snippet = text[span[0]:span[1]]
             if is_date(snippet):
                 continue
-            
-            # Additional filtering: skip if it looks like a location or person name
-            snippet_lower = snippet.lower()
-            if any(word in snippet_lower for word in ['street', 'road', 'avenue', 'park', 'garden', 'hospital', 'clinic']):
-                # Skip if it's clearly a location (unless it's a disease name with these words)
-                if not any(disease_word in snippet_lower for disease_word in ['disease', 'syndrome', 'cancer', 'tumor']):
-                    continue
             
             context_left = text[max(0, span[0] - 50):span[0]]
             context_right = text[span[1]:min(len(text), span[1] + 50)]
@@ -138,7 +87,7 @@ class OneNetLinker(AbstractEntityLinker):
         return entities
     
     def _create_onenet_prompt(self, entity: Dict, candidates: List[Dict]) -> str:
-        """Create OneNet-style prompt for DOID entity linking"""
+        """Create OneNet-style prompt for Wikipedia entity linking"""
         # Format context similar to OneNet
         context = f"{entity['context_left']} ###{entity['text']}### {entity['context_right']}"
         context = ' '.join(context.split())  # Clean whitespace
@@ -149,14 +98,14 @@ class OneNetLinker(AbstractEntityLinker):
         else:
             shuffled_candidates = candidates
         
-        content = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
-TASK: Link Medical Mention to DOID Disease Entry
+        content = f"""KNOWLEDGE BASE: Wikipedia/Wikidata
+TASK: Link Entity Mention to Wikipedia Entry
 
-=== MEDICAL MENTION ===
+=== ENTITY MENTION ===
 Mention: {entity['text']}
-Clinical Context: {context}
+Context: {context}
 
-=== DOID CANDIDATE DISEASES ===
+=== WIKIPEDIA CANDIDATE ENTITIES ===
 """
         
         # Add candidates
@@ -166,20 +115,20 @@ Clinical Context: {context}
         
         content += """
 === YOUR TASK ===
-Select which DOID disease entry best matches the medical mention in the given clinical context.
+Select which Wikipedia entity best matches the mention in the given context.
 
 === MATCHING CRITERIA ===
-1. **Exact Name Match**: Does the candidate match the disease name used?
-2. **Medical Terminology**: Consider medical synonyms and alternative names
-3. **Specificity**: Match the appropriate level of detail (specific vs. general)
-4. **Clinical Context**: Does it fit the medical scenario described?
+1. **Name Match**: Does the name correspond to the mention?
+2. **Context Fit**: Does it fit the topic and domain of the surrounding text?
+3. **Entity Type**: Is it the right type (person, place, organization, etc.)?
+4. **Prominence**: Is this the most notable entity with this name?
 
 IMPORTANT: Output ONLY the entity number (1, 2, 3, etc.) of the best match.
 
 === OUTPUT FORMAT ===
 Answer: [number]
 
-Example: If Entity 2 is the best match, output: Answer: 2
+Example: If Entity 3 is the best match, output: Answer: 3
 """
         
         return content
@@ -246,7 +195,7 @@ Example: If Entity 2 is the best match, output: Answer: 2
         candidate_dicts.sort(key=lambda x: x.get('score', 0), reverse=True)
         
         # If no LLM client, return best candidate
-        if not self.llm_client or (not self.llm_client.model and not self.llm_client.gemini_model):
+        if not self.llm_client or not self.llm_client.model:
             return candidate_dicts[0]['id']
         
         # Create OneNet-style prompt
