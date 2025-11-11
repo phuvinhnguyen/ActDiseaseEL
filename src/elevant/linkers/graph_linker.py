@@ -157,40 +157,64 @@ class GraphLinker(AbstractEntityLinker):
                 prompt = f"""
 TEXT: {text}
 
-CONTEXT: You are a medical researcher extracting disease and health-related entities from historical texts. Your task is to identify ONLY medical conditions, diseases, symptoms, treatments, and health-related terms that can be mapped to the Human Disease Ontology (DOID).
+CONTEXT: You are a medical ontology expert working with the Human Disease Ontology (DOID). DOID is a comprehensive hierarchical controlled vocabulary for human diseases. Your task is to extract ONLY entities that can be mapped to DOID entries.
+
+WHAT IS DOID?
+The Human Disease Ontology (DOID) contains:
+- Disease names (e.g., "type 2 diabetes mellitus", "breast cancer", "Alzheimer's disease")
+- Medical conditions (e.g., "hypertension", "asthma", "arthritis")
+- Syndromes (e.g., "Down syndrome", "metabolic syndrome")
+- Infectious diseases (e.g., "tuberculosis", "malaria", "COVID-19")
+- Genetic disorders (e.g., "cystic fibrosis", "sickle cell anemia")
+- Mental health conditions (e.g., "depression", "schizophrenia", "anxiety disorder")
+- Allergies and hypersensitivities (e.g., "peanut allergy", "drug allergy")
+- Cancers and tumors (e.g., "angiosarcoma", "lymphoma", "glioblastoma")
 
 INSTRUCTIONS:
-1. Identify ONLY disease and health-related entities:
-   - Medical conditions and diseases (e.g., "diabetes", "cancer", "angiosarcoma")
-   - Symptoms and signs (e.g., "fever", "pain", "inflammation")
-   - Health-related terms (e.g., "treatment", "diagnosis", "syndrome")
-   - Anatomical terms related to diseases (e.g., "breast cancer", "lung disease")
-2. IGNORE all non-healthcare entities:
-   - Do NOT include: people names, locations, organizations, dates, numbers, or general terms
-   - Do NOT include: places (e.g., "Kew Gardens", "Surrey", "Leven Park")
-   - Do NOT include: person names (e.g., "THOMSON", "Thompson")
-   - Do NOT include: ages or time periods (e.g., "37 years")
-3. For each health-related entity, provide the entity text and a short context window around it
-4. Identify relationships between disease entities if relevant
+1. Extract ONLY entities that are likely DOID entries:
+   ✓ Disease names (specific and general)
+   ✓ Medical conditions and disorders
+   ✓ Syndromes and symptom complexes
+   ✓ Infectious diseases
+   ✓ Allergies and hypersensitivity conditions
+   ✓ Cancer types and tumors
+   ✓ Genetic/hereditary conditions
+   ✓ Mental health disorders
+   
+2. EXCLUDE non-disease entities:
+   ✗ People names (e.g., "Dr. Smith", "THOMSON")
+   ✗ Locations/Places (e.g., "Kew Gardens", "Surrey", "Leven Park")
+   ✗ Organizations (e.g., "WHO", "hospital names")
+   ✗ Dates and times (e.g., "1891", "37 years")
+   ✗ Numbers and measurements
+   ✗ Anatomical parts UNLESS part of disease name (e.g., "heart" alone is ✗, but "heart disease" is ✓)
+   ✗ Symptoms UNLESS they are a defined condition (e.g., "fever" alone is ✗, but "rheumatic fever" is ✓)
+   ✗ Legal/regulatory terms (e.g., "Dangerous Drugs Acts")
+   ✗ General medical procedures (e.g., "surgery", "vaccination" without disease context)
+
+3. Prefer complete disease names:
+   - Good: "type 2 diabetes mellitus", "acute bronchitis", "peanut allergy"
+   - Avoid: "diabetes" alone if text says "diabetes mellitus"
 
 OUTPUT FORMAT:
-For each entity, output:
+For each DOID-likely entity:
 ENTITY: [entity_text] | [context_window]
 
-For each relation, output:
+For disease relationships:
 RELATION: [entity1_text] -> [entity2_text] | [relation_type]
 
-Example:
-ENTITY: diabetes | patient diagnosed with diabetes mellitus
-ENTITY: breast cancer | treatment for breast cancer
-RELATION: diabetes -> breast cancer | associated_with
+EXAMPLES:
+ENTITY: type 2 diabetes mellitus | diagnosed with type 2 diabetes mellitus and hypertension
+ENTITY: hypertension | diabetes mellitus and hypertension in elderly patients
+ENTITY: aspirin allergy | patient developed aspirin allergy after treatment
+ENTITY: angiosarcoma | rare vascular cancer angiosarcoma was detected
 
 IMPORTANT:
-- Entity text must match exactly what appears in the text
-- Context window should be 5-10 words around the entity
-- ONLY output disease and health-related entities
-- If no health-related entities are found, output nothing
-- Only output entities and relations, no other text
+- Match text exactly as it appears
+- Context should be 5-10 words surrounding the entity
+- ONLY output entities mappable to DOID (diseases, conditions, syndromes)
+- If no DOID-relevant entities found, output nothing
+- No explanations, only ENTITY and RELATION lines
 """
                 
                 messages = [{"role": "user", "content": prompt}]
@@ -286,20 +310,33 @@ IMPORTANT:
 ENTITY: "{node.entity_text}"
 CONTEXT: "...{node.context_left} {node.entity_text} {node.context_right}..."
 
+TASK: Generate {self.N_DESCRIPTIONS} different search queries to find this entity in the Human Disease Ontology (DOID). Each description should help match this entity to a disease, medical condition, or health-related term in DOID.
+
+CONTEXT: DOID (Human Disease Ontology) contains diseases, medical conditions, syndromes, infections, allergies, and health disorders. Your descriptions should help find the correct DOID entry.
+
 INSTRUCTIONS:
-Generate {self.N_DESCRIPTIONS} different descriptions for this entity. Each description should be a short phrase that helps identify what this entity is.
+1. Think about what type of disease/condition this might be
+2. Consider medical terminology and common names
+3. Include relevant category terms (e.g., "diabetes", "cancer", "syndrome", "disease", "disorder")
+4. Be specific but also consider variations
 
 OUTPUT FORMAT:
-DESCRIPTION 1: [description1]
-DESCRIPTION 2: [description2]
-DESCRIPTION 3: [description3]
+DESCRIPTION 1: [medical description or search term]
+DESCRIPTION 2: [alternative medical term or category]
+DESCRIPTION 3: [related disease terminology]
 
-Example:
-DESCRIPTION 1: A technology company
-DESCRIPTION 2: A fruit company  
-DESCRIPTION 3: A multinational corporation
+EXAMPLES:
+For entity "type 2 diabetes":
+DESCRIPTION 1: type 2 diabetes mellitus
+DESCRIPTION 2: non-insulin-dependent diabetes
+DESCRIPTION 3: adult-onset diabetes
 
-Make each description distinct and informative.
+For entity "peanut allergy":
+DESCRIPTION 1: peanut allergy
+DESCRIPTION 2: peanut hypersensitivity
+DESCRIPTION 3: legume allergy peanut
+
+Make each description medically relevant and helpful for finding the correct DOID entry.
 """
             
             messages = [{"role": "user", "content": prompt}]
@@ -423,7 +460,9 @@ Make each description distinct and informative.
 ENTITY: "{node.entity_text}"
 CONTEXT: "...{node.context_left} {node.entity_text} {node.context_right}..."
 
-CANDIDATES:
+TASK: Select the best matching disease/condition from the Human Disease Ontology (DOID) for the entity above.
+
+CANDIDATES FROM DOID:
 """
             
             for i, candidate in enumerate(node.candidates[:self.T_MAX]):
@@ -431,12 +470,22 @@ CANDIDATES:
             
             prompt += f"""
 INSTRUCTIONS:
-Select the best candidate for the entity above.
+1. Consider the medical context and exact wording
+2. Match based on disease terminology and specificity
+3. Prefer exact medical terminology matches
+4. Consider disease hierarchy (specific vs. general conditions)
+5. If the entity mentions a specific subtype, choose the specific DOID entry
+
+RANKING CRITERIA:
+- Exact match of disease name (highest priority)
+- Semantic similarity in medical terminology
+- Correct level of specificity (e.g., "type 2 diabetes mellitus" vs. "diabetes mellitus")
+- Context appropriateness
 
 OUTPUT FORMAT:
 BEST: [number]
 
-Only output the number of the best candidate.
+Only output the number (1-{min(self.T_MAX, len(node.candidates))}) of the best matching DOID candidate.
 """
             
             messages = [{"role": "user", "content": prompt}]

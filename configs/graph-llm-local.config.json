@@ -1,0 +1,9 @@
+{
+  "linker_name": "Graph LLM Local",
+  "llm_model_path": "Qwen/Qwen2.5-0.5B-Instruct",
+  "n_descriptions": 3,
+  "k_search": 5,
+  "t_max": 5,
+  "high_confidence_threshold": 0.9,
+  "experiment_description": "Graph-based entity linking using local small LLM (Qwen 0.5B). Tests transformers integration."
+}

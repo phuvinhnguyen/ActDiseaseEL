@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import Dict, Set, Tuple, Iterator, Optional, List, Any
+import os
 
 import logging
 
@@ -8,6 +9,13 @@ from elevant.evaluation.groundtruth_label import GroundtruthLabel
 from elevant.models.database import Database
 from elevant.models.gender import Gender
 from elevant.helpers.entity_database_reader import EntityDatabaseReader
+
+# Optional fuzzy matching
+try:
+    from rapidfuzz import fuzz, process
+    FUZZY_AVAILABLE = True
+except ImportError:
+    FUZZY_AVAILABLE = False
 
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
@@ -304,6 +312,75 @@ class EntityDatabase:
                 entity_ids = entity_ids.union(self.family_name_aliases[alias_lower])
             if alias_lower in self.link_aliases:
                 entity_ids = entity_ids.union(self.link_aliases[alias_lower])
+        
+        # Try fuzzy matching if still no candidates
+        use_fuzzy = os.getenv('ENTITY_FUZZY_MATCHING', 'true').lower() == 'true'
+        fuzzy_threshold = int(os.getenv('ENTITY_FUZZY_THRESHOLD', '85'))
+        
+        if not entity_ids and use_fuzzy and FUZZY_AVAILABLE:
+            entity_ids = self._fuzzy_search_candidates(alias, threshold=fuzzy_threshold, max_results=10)
+        
+        return entity_ids
+    
+    def _fuzzy_search_candidates(self, query: str, threshold: int = 85, max_results: int = 10) -> Set[str]:
+        """
+        Perform fuzzy string matching to find similar entity names/aliases.
+        
+        Args:
+            query: The search string
+            threshold: Minimum similarity score (0-100)
+            max_results: Maximum number of fuzzy matches to return
+            
+        Returns:
+            Set of entity IDs that fuzzy match the query
+        """
+        if not FUZZY_AVAILABLE:
+            return set()
+        
+        entity_ids = set()
+        
+        # Collect all searchable strings (names and aliases)
+        searchable = {}
+        
+        # Add entity names
+        if self.name_to_entities_db:
+            for name, ids in self.name_to_entities_db.items():
+                if isinstance(name, str) and name:
+                    searchable[name] = ids
+        
+        # Add aliases
+        if self.alias_to_entities_db:
+            if hasattr(self.alias_to_entities_db, 'items'):
+                for alias, ids in self.alias_to_entities_db.items():
+                    if isinstance(alias, str) and alias:
+                        searchable[alias] = ids
+        
+        if not searchable:
+            return set()
+        
+        # Perform fuzzy matching
+        try:
+            # Use rapidfuzz to find top matches
+            matches = process.extract(
+                query, 
+                searchable.keys(), 
+                scorer=fuzz.WRatio,  # Weighted ratio for better partial matches
+                limit=max_results,
+                score_cutoff=threshold
+            )
+            
+            # Collect entity IDs from matches
+            for match_text, score, _ in matches:
+                if match_text in searchable:
+                    ids = searchable[match_text]
+                    if isinstance(ids, set):
+                        entity_ids.update(ids)
+                    elif isinstance(ids, str):
+                        entity_ids.add(ids)
+                    logger.debug(f"Fuzzy match: '{query}' -> '{match_text}' (score: {score})")
+            
+        except Exception as e:
+            logger.debug(f"Fuzzy matching error: {e}")
         
         return entity_ids
 

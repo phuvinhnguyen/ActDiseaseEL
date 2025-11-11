@@ -9,3 +9,4 @@ wikidata-types/index/*
 wikidata-types/.*
 evaluation-results/*
 /logs/
+tmp_forkserver.config.json
