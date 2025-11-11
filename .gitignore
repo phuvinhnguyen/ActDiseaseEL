@@ -10,3 +10,6 @@ wikidata-types/.*
 evaluation-results/*
 /logs/
 tmp_forkserver.config.json
+elevant_data*
+elevant_data_doid
+elevant_data_wiki
