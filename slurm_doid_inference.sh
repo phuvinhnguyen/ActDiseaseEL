@@ -15,15 +15,15 @@
 # Tests: graph-llm and onenet-llm on healthcare corpus with DOID
 # ============================================================================
 
-echo "=========================================="
-echo "DOID Custom KB Inference"
-echo "Job ID: $SLURM_JOB_ID"
-echo "Start time: $(date)"
-echo "=========================================="
-
-# Set environment
-export PYTHONPATH=src
-cd /home/kat/Desktop/UppsalaUniversity/Project/EntityLinking/elevant
+# Change to the directory where the job was submitted from
+if [ -n "$SLURM_SUBMIT_DIR" ]; then
+    cd "$SLURM_SUBMIT_DIR"
+    echo "Working directory: $SLURM_SUBMIT_DIR"
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    cd "$SCRIPT_DIR"
+    echo "Working directory: $SCRIPT_DIR"
+fi
 
 # ============================================================================
 # Switch to DOID Custom Knowledge Base data

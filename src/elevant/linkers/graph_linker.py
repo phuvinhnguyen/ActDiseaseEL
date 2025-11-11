@@ -167,14 +167,14 @@ TASK: Medical Entity Detection for Disease Linking
 
 === ABOUT DOID ===
 The Human Disease Ontology (DOID) is a medical knowledge base containing:
-• Diseases: diabetes, cancer, influenza, tuberculosis, malaria
-• Medical conditions: hypertension, asthma, arthritis, obesity
-• Syndromes: Down syndrome, metabolic syndrome, SARS
-• Infectious diseases: COVID-19, HIV, hepatitis, pneumonia
-• Genetic disorders: cystic fibrosis, hemophilia, sickle cell disease
-• Mental health: depression, schizophrenia, anxiety disorders
-• Allergies: peanut allergy, drug allergies, food allergies
-• Cancers: breast cancer, lung cancer, leukemia, lymphoma
+• Diseases: diabetes, cancer, influenza, tuberculosis, malaria, ...
+• Medical conditions: hypertension, asthma, arthritis, obesity, ...
+• Syndromes: Down syndrome, metabolic syndrome, SARS, ...
+• Infectious diseases: COVID-19, HIV, hepatitis, pneumonia, ...
+• Genetic disorders: cystic fibrosis, hemophilia, sickle cell disease, ...
+• Mental health: depression, schizophrenia, anxiety disorders, ...
+• Allergies: peanut allergy, drug allergies, food allergies, ...
+• Cancers: breast cancer, lung cancer, leukemia, lymphoma, ...
 
 DOID does NOT contain:
 ✗ People (doctors, patients, researchers)
@@ -204,7 +204,7 @@ Focus on disease-related entities:
 
 === OUTPUT FORMAT ===
 For each healthcare entity found:
-ENTITY: [exact_text_from_document] | [5-10 words of context]
+ENTITY: [exact_text_from_document] | [exact surrounding context window]
 
 For relationships between diseases:
 RELATION: [disease1] -> [disease2] | [relationship_type]
@@ -218,7 +218,7 @@ RELATION: diabetes mellitus -> diabetic neuropathy | complication
 === REQUIREMENTS ===
 • Extract only disease/condition names, not people, places, or organizations
 • Use exact text as it appears in the document
-• Provide 5-10 words of surrounding context
+• Provide exact surrounding context window
 • If no healthcare entities found, output nothing
 • No explanations or additional text
 """

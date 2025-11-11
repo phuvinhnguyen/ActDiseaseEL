@@ -136,17 +136,17 @@ TEXT:
 {text}
 
 === WHAT TO EXTRACT ===
-1. **People**: "Barack Obama", "Marie Curie", "Elon Musk"
-2. **Organizations**: "Google", "United Nations", "Harvard University"
-3. **Locations**: "Paris", "Mount Everest", "Amazon River"
-4. **Products/Technologies**: "iPhone", "Tesla Model S", "Linux"
-5. **Events**: "World War II", "Olympic Games", "Renaissance"
-6. **Works**: "Harry Potter", "Mona Lisa", "Bohemian Rhapsody"
-7. **Concepts**: "Democracy", "Artificial Intelligence", "Climate Change"
+1. **People**: "Barack Obama", "Marie Curie", "Elon Musk", ...
+2. **Organizations**: "Google", "United Nations", "Harvard University", ...
+3. **Locations**: "Paris", "Mount Everest", "Amazon River", ...
+4. **Products/Technologies**: "iPhone", "Tesla Model S", "Linux", ...
+5. **Events**: "World War II", "Olympic Games", "Renaissance", ...
+6. **Works**: "Harry Potter", "Mona Lisa", "Bohemian Rhapsody", ...
+7. **Concepts**: "Democracy", "Artificial Intelligence", "Climate Change", ...
 
 === OUTPUT FORMAT ===
 For each entity:
-ENTITY: [exact_text_from_document] | [5-10 words of context]
+ENTITY: [exact_text_from_document] | [exact surrounding context window]
 
 For relationships:
 RELATION: [entity1] -> [entity2] | [relationship_type]
@@ -161,7 +161,7 @@ RELATION: Steve Jobs -> Apple Inc. | founder_of
 === REQUIREMENTS ===
 • Extract notable entities that would have Wikipedia articles
 • Use exact text as it appears in the document
-• Provide 5-10 words of surrounding context
+• Provide exact surrounding context window
 • Include entities of all types (not just one category)
 • If no notable entities found, output nothing
 • No explanations or additional text

@@ -15,15 +15,17 @@
 # Methods: graph-llm, onenet-llm, refined, rel, random, spacy, baseline
 # ============================================================================
 
-echo "=========================================="
-echo "Wikipedia Benchmark Evaluation"
-echo "Job ID: $SLURM_JOB_ID"
-echo "Start time: $(date)"
-echo "=========================================="
-
-# Set environment
-export PYTHONPATH=src
-cd /home/kat/Desktop/UppsalaUniversity/Project/EntityLinking/elevant
+# Change to the directory where the job was submitted from
+# This ensures the script works regardless of the user's directory structure
+if [ -n "$SLURM_SUBMIT_DIR" ]; then
+    cd "$SLURM_SUBMIT_DIR"
+    echo "Working directory: $SLURM_SUBMIT_DIR"
+else
+    # Fallback for local testing
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    cd "$SCRIPT_DIR"
+    echo "Working directory: $SCRIPT_DIR"
+fi
 
 # ============================================================================
 # Switch to Wikipedia/Wikidata data
