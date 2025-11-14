@@ -1,8 +1,0 @@
-{
-  "linker_name": "OneNet LLM Local",
-  "llm_model_path": "moonshotai/Kimi-K2-Thinking",
-  "top_k": 5,
-  "shuffle_candidates": true,
-  "experiment_description": "OneNet-style entity linking using local Qwen2.5-3B model for custom KB (DOID)."
-}
-
