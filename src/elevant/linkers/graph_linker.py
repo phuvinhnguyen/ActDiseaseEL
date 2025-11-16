@@ -1,13 +1,10 @@
 """
 Graph-based entity linker using transformers LLM
-Based on the graph_system.py approach from EntityLinking/e2e/systems
+Simplified version with batch processing for faster inference
 """
 import logging
 import re
-import time
-from typing import Dict, Tuple, Optional, Any, List, Set
-from dataclasses import dataclass, field
-from collections import defaultdict
+from typing import Dict, Tuple, Optional, Any, List
 
 import spacy
 from spacy.tokens import Doc
@@ -24,23 +21,6 @@ import elevant.ner.ner_postprocessing  # import is needed so Python finds the cu
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
 
-@dataclass
-class GraphNode:
-    """Represents a node in the entity graph"""
-    entity_text: str
-    start_pos: int
-    end_pos: int
-    context_left: str
-    context_right: str
-    descriptions: List[str] = field(default_factory=list)
-    entity_id: Optional[str] = None
-    entity_title: Optional[str] = None
-    confidence: float = 0.0
-    status: str = "pending"  # pending, high_confidence, done
-    candidates: List[Dict] = field(default_factory=list)
-    metadata: Dict = field(default_factory=dict)
-
-
 class GraphLinker(AbstractEntityLinker):
     """
     Graph-based entity linker following graph_system.py approach
@@ -51,8 +31,9 @@ class GraphLinker(AbstractEntityLinker):
                  entity_database: EntityDatabase,
                  config: Dict[str, Any]):
         self.entity_db = entity_database
-        self.model = spacy.load(settings.LARGE_MODEL_NAME, disable=["lemmatizer"])
-        self.model.add_pipe("ner_postprocessor", after="ner")
+        self.model = None
+        # self.model = spacy.load(settings.LARGE_MODEL_NAME, disable=["lemmatizer"])
+        # self.model.add_pipe("ner_postprocessor", after="ner")
         
         # Get config variables
         self.linker_identifier = config.get("linker_name", "Graph LLM")
@@ -98,577 +79,337 @@ class GraphLinker(AbstractEntityLinker):
 
         # Graph-specific parameters
         self.N_DESCRIPTIONS = config.get("n_descriptions", 3)
-        self.K_SEARCH = config.get("k_search", 5)
+        self.K_SEARCH = config.get("k_search", 10)
         self.T_MAX = config.get("t_max", 5)
-        self.HIGH_CONFIDENCE_THRESHOLD = config.get("high_confidence_threshold", 0.9)
+        self.HIGH_CONFIDENCE_THRESHOLD = config.get("high_confidence_threshold", 0.7)
         
     def has_entity(self, entity_id: str) -> bool:
         return self.entity_db.contains_entity(entity_id)
     
-    def _build_entity_graph(self, text: str, doc: Doc):
-        """Build entity graph from text using LLM and spaCy"""
-        graph_nodes = {}
-        
-        # Non-healthcare entity labels to filter out for DOID
-        NON_HEALTHCARE_LABELS = {
-            "GPE",      # Geopolitical entity (countries, cities, states)
-            "LOC",      # Location (non-geopolitical locations)
-            "PERSON",   # People
-            "ORG",      # Organizations (unless healthcare-related, but hard to filter)
-            "DATE",     # Dates
-            "TIME",     # Times
-            "CARDINAL", # Numbers
-            "ORDINAL",  # Ordinal numbers
-            "MONEY",    # Money
-            "QUANTITY", # Quantities
-            "PERCENT",  # Percentages
-            "EVENT",    # Events
-            "FAC",      # Facilities (buildings, airports, etc.)
-        }
-        
-        # First, detect entities using spaCy
-        entities = []
-        for ent in doc.ents:
-            if ent.label_ in NER_IGNORE_TAGS:
-                continue
-            # Filter out non-healthcare entities for DOID
-            if ent.label_ in NON_HEALTHCARE_LABELS:
-                continue
-            span = (ent.start_char, ent.end_char)
-            snippet = text[span[0]:span[1]]
-            if is_date(snippet):
-                continue
-            
-            # Additional filtering: skip if it looks like a location or person name
-            snippet_lower = snippet.lower()
-            if any(word in snippet_lower for word in ['street', 'road', 'avenue', 'park', 'garden', 'hospital', 'clinic']):
-                # Skip if it's clearly a location (unless it's a disease name with these words)
-                if not any(disease_word in snippet_lower for disease_word in ['disease', 'syndrome', 'cancer', 'tumor']):
-                    continue
-            
-            context_left = text[max(0, span[0] - 50):span[0]]
-            context_right = text[span[1]:min(len(text), span[1] + 50)]
-            
-            entities.append({
-                'text': snippet,
-                'start_pos': span[0],
-                'end_pos': span[1],
-                'context_left': context_left,
-                'context_right': context_right
-            })
-        
-        # If LLM client available, try to enhance detection and get relations
-        if self.llm_client and (self.llm_client.model or self.llm_client.gemini_model):
-            try:
-                # Use LLM to detect additional entities and relations
-                prompt = f"""
-KNOWLEDGE BASE: Human Disease Ontology (DOID)
-TASK: Medical Entity Detection for Disease Linking
+    def _detect_entities_with_llm(self, text: str) -> List[Dict]:
+        """Use LLM to detect medical entities"""
+        prompt = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
+TASK: Extract Medical Disease Entities
 
 === ABOUT DOID ===
-The Human Disease Ontology (DOID) is a medical knowledge base containing:
-• Diseases: diabetes, cancer, influenza, tuberculosis, malaria, ...
-• Medical conditions: hypertension, asthma, arthritis, obesity, ...
-• Syndromes: Down syndrome, metabolic syndrome, SARS, ...
-• Infectious diseases: COVID-19, HIV, hepatitis, pneumonia, ...
-• Genetic disorders: cystic fibrosis, hemophilia, sickle cell disease, ...
-• Mental health: depression, schizophrenia, anxiety disorders, ...
-• Allergies: peanut allergy, drug allergies, food allergies, ...
-• Cancers: breast cancer, lung cancer, leukemia, lymphoma, ...
+DOID contains diseases, syndromes, infections, genetic disorders, cancers, and medical conditions.
+DOID does NOT contain: people, places, organizations, dates, numbers, anatomical parts alone.
 
-DOID does NOT contain:
-✗ People (doctors, patients, researchers)
-✗ Places (hospitals, clinics, cities, countries)
-✗ Organizations (WHO, medical institutions)
-✗ Dates, times, numbers, measurements
-✗ Anatomical parts alone (heart, liver, lung) - only with disease context
-✗ Isolated symptoms (fever, pain, cough) - only as defined conditions
-✗ Medical procedures or drugs alone
-✗ Legal or administrative terms
-
-=== YOUR TASK ===
-Extract healthcare terms and disease mentions from the text that can be linked to DOID entries.
-
-TEXT:
+=== TEXT ===
 {text}
 
-=== WHAT TO EXTRACT ===
-Focus on disease-related entities:
-1. Complete disease names: "type 2 diabetes mellitus", "rheumatoid arthritis"
-2. Medical conditions: "chronic kidney disease", "heart failure"
-3. Infections: "streptococcal infection", "viral pneumonia"
-4. Syndromes: "irritable bowel syndrome", "carpal tunnel syndrome"
-5. Cancers with specificity: "stage II breast cancer", "non-small cell lung cancer"
-6. Mental health conditions: "major depressive disorder", "bipolar disorder"
-7. Allergic conditions: "penicillin allergy", "latex hypersensitivity"
+=== YOUR TASK ===
+Extract ALL disease/medical condition mentions that can be linked to DOID.
 
-=== OUTPUT FORMAT ===
-For each healthcare entity found:
-ENTITY: [exact_text_from_document] | [exact surrounding context window]
+=== REQUIRED OUTPUT FORMAT ===
+You MUST output each entity in this EXACT format (all fields required):
+ENTITY: mention text | short surrounding text | alias 1, alias 2, alias 3
 
-For relationships between diseases:
-RELATION: [disease1] -> [disease2] | [relationship_type]
+Where:
+- mention text: The exact text as it appears in the document
+- short surrounding text: A exact match short surrounding text that contains the mention text
+- alias1,alias2,alias3: Comma-separated list of alternative names/synonyms (at least include the mention text itself)
 
-=== EXAMPLES ===
-ENTITY: type 2 diabetes mellitus | Patient diagnosed with type 2 diabetes mellitus in 2020
-ENTITY: hypertension | comorbid conditions include hypertension and hyperlipidemia
-ENTITY: seasonal allergies | History of seasonal allergies and asthma
-RELATION: diabetes mellitus -> diabetic neuropathy | complication
+=== CRITICAL: FORMAT EXAMPLE ===
+If the text contains: "Patient diagnosed with agranulocytosis and leucopenia."
+Then output:
+ENTITY: agranulocytosis | In many cases, agranulocytosis is caused by chemotherapy. | agranulocytosis,agranulocytic angina
 
-=== REQUIREMENTS ===
-• Extract only disease/condition names, not people, places, or organizations
-• Use exact text as it appears in the document
-• Provide exact surrounding context window
-• If no healthcare entities found, output nothing
-• No explanations or additional text
+If "leucopenia" starts at character 50 and ends at character 60:
+Then output:
+ENTITY: Leucopenia | Leucopenia is a condition that occurs when the number of white blood cells in the body is too low. | leucopenia,leukopenia
+
+=== STRICT REQUIREMENTS ===
+1. EVERY line must start with "ENTITY: "
+2. ALL fields are REQUIRED (mention | short surrounding text | aliases)
+3. Use EXACT text from document (case-sensitive and detail specific, like copy from the text) for mention text and short surrounding text, this is the only way to find the exact position of the mention text in the text
+4. Aliases must include at least the mention text itself, following DOID entity name format for exact match)
+5. One entity per line, no blank lines between entities
+6. If no entities found, output nothing
+
+=== OUTPUT NOW ===
 """
-                
-                messages = [{"role": "user", "content": prompt}]
-                response = self.llm_client.call(messages, max_tokens=1024)
-                
-                # Parse additional entities from LLM response
-                llm_entities = self._parse_llm_entities(response, text)
-                
-                # Merge with spaCy entities (avoid duplicates)
-                existing_texts = {e['text'] for e in entities}
-                for llm_ent in llm_entities:
-                    if llm_ent['text'] not in existing_texts:
-                        entities.append(llm_ent)
-                        existing_texts.add(llm_ent['text'])
-                        
-            except Exception as e:
-                logger.warning(f"Error in LLM entity detection: {e}")
         
-        # Create graph nodes
-        for i, entity_data in enumerate(entities):
-            node_id = f"entity_{i}"
-            node = GraphNode(
-                entity_text=entity_data['text'],
-                start_pos=entity_data['start_pos'],
-                end_pos=entity_data['end_pos'],
-                context_left=entity_data['context_left'],
-                context_right=entity_data['context_right']
-            )
-            graph_nodes[node_id] = node
+        messages = [{"role": "user", "content": prompt}]
+        response = self.llm_client.call(messages, max_tokens=512)
         
-        return graph_nodes
-    
-    def _parse_llm_entities(self, response: str, text: str) -> List[Dict]:
-        """Parse entities from LLM response"""
         entities = []
-        lines = response.strip().split('\n')
-        
-        for line in lines:
+        for line in response.split('\n'):
             line = line.strip()
-            if line.startswith('ENTITY:'):
-                entity_part = line[7:].strip()
-                if '|' in entity_part:
-                    entity_text, context_window = entity_part.split('|', 1)
-                    entity_text = entity_text.strip()
-                    context_window = context_window.strip()
-                    
-                    # Find entity position using context matching
-                    position_info = self._find_entity_position(text, entity_text, context_window)
-                    if position_info:
-                        entities.append({
-                            'text': entity_text,
-                            'start_pos': position_info['start_pos'],
-                            'end_pos': position_info['end_pos'],
-                            'context_left': position_info['context_left'],
-                            'context_right': position_info['context_right']
-                        })
+            if not line or not line.startswith('ENTITY:'): continue
+            
+            try:
+                # Remove "ENTITY: " prefix and split by |
+                parts = line.replace('ENTITY:', '').strip().split('|')
+                if len(parts) < 3: continue
+                
+                mention_text = parts[0].strip()
+                surrounding_text = parts[1].strip()
+                aliases = [i.strip() for i in parts[2].strip().split(',') if i.strip()]
+
+                # find position of surrounding text in text
+                if len(text.split(mention_text)) > 2:
+                    start_pos_surrounding = text.find(surrounding_text)
+                    start_pos = text.find(mention_text, start_pos_surrounding - 1)
+                else:
+                    start_pos = text.find(mention_text)
+
+                entities.append({
+                    'text': mention_text,
+                    'start_pos': start_pos,
+                    'end_pos': start_pos + len(mention_text),
+                    'context_left': text[:start_pos],
+                    'context_right': text[start_pos + len(mention_text):],
+                    'aliases': aliases,
+                    'link_entities': {},
+                    'confidence': 0.0,
+                    'candidates': []
+                })
+            except Exception as e:
+                logger.warning(f"Error parsing entity line '{line}': {e}")
+                continue
         
         return entities
     
-    def _find_entity_position(self, text: str, entity_text: str, context_window: str) -> Optional[Dict]:
-        """Find entity position in text using entity text and context window"""
-        entity_lower = entity_text.lower()
-        text_lower = text.lower()
+
+    def _parse_linked_entity(self, output: str) -> tuple:
+        """Parse entity ID and confidence from LLM output
         
-        # Try exact entity match first
-        start_pos = text_lower.find(entity_lower)
-        if start_pos != -1:
-            end_pos = start_pos + len(entity_text)
-            context_left = text[max(0, start_pos - 50):start_pos]
-            context_right = text[end_pos:min(len(text), end_pos + 50)]
-            return {
-                'start_pos': start_pos,
-                'end_pos': end_pos,
-                'context_left': context_left,
-                'context_right': context_right
-            }
+        Returns:
+            tuple: (entity_id, confidence) where entity_id is str or None, confidence is float 0.0-1.0
+        """
+        entity_id = None
+        confidence = None
         
-        return None
-    
-    def _generate_descriptions(self, node: GraphNode, text: str):
-        """Generate descriptions for entity using LLM"""
-        if not self.llm_client or (not self.llm_client.model and not self.llm_client.gemini_model):
-            # Fallback descriptions
-            node.descriptions = [
-                f"The entity: {node.entity_text}",
-                f"Information about {node.entity_text}",
-                f"Details regarding {node.entity_text}"
-            ]
-            return
-        
-        try:
-            prompt = f"""
-KNOWLEDGE BASE: Human Disease Ontology (DOID)
-TASK: Generate Medical Search Queries
-
-=== ENTITY TO SEARCH ===
-Entity: "{node.entity_text}"
-Context: "...{node.context_left} {node.entity_text} {node.context_right}..."
-
-=== YOUR TASK ===
-Generate {self.N_DESCRIPTIONS} different medical search queries to find this entity in DOID.
-DOID contains diseases, syndromes, infections, genetic disorders, cancers, and medical conditions.
-
-=== SEARCH QUERY GUIDELINES ===
-1. Medical terminology (formal names): "diabetes mellitus", "myocardial infarction"
-2. Common names (lay terms): "heart attack", "sugar disease"
-3. Specific variants: "type 2 diabetes", "non-insulin-dependent diabetes"
-4. Category + specificity: "chronic kidney disease", "bacterial pneumonia"
-5. Include disease type when relevant: "syndrome", "disorder", "disease", "cancer"
-
-=== EXAMPLES ===
-Entity: "Type 2 Diabetes"
-DESCRIPTION 1: type 2 diabetes mellitus
-DESCRIPTION 2: diabetes mellitus type 2
-DESCRIPTION 3: non-insulin-dependent diabetes mellitus
-
-Entity: "breast cancer"
-DESCRIPTION 1: breast carcinoma
-DESCRIPTION 2: malignant breast neoplasm
-DESCRIPTION 3: breast cancer
-
-Entity: "food allergy"
-DESCRIPTION 1: food allergy
-DESCRIPTION 2: food hypersensitivity
-DESCRIPTION 3: allergic reaction to food
-
-=== OUTPUT FORMAT ===
-Generate {self.N_DESCRIPTIONS} search queries:
-DESCRIPTION 1: [primary medical term]
-DESCRIPTION 2: [alternative medical term or synonym]
-DESCRIPTION 3: [related term or specification]
-
-Focus on medical terminology that would appear in DOID.
-"""
-            
-            messages = [{"role": "user", "content": prompt}]
-            response = self.llm_client.call(messages, max_tokens=256)
-            
-            # Parse descriptions
-            descriptions = self._parse_descriptions(response)
-            if descriptions:
-                node.descriptions = descriptions[:self.N_DESCRIPTIONS]
-            else:
-                node.descriptions = [
-                    f"The entity: {node.entity_text}",
-                    f"Information about {node.entity_text}",
-                    f"Details regarding {node.entity_text}"
-                ]
-                
-        except Exception as e:
-            logger.warning(f"Error generating descriptions: {e}")
-            node.descriptions = [f"Entity: {node.entity_text}"]
-    
-    def _parse_descriptions(self, response: str) -> List[str]:
-        """Parse descriptions from LLM response"""
-        descriptions = []
-        lines = response.strip().split('\n')
-        
-        for line in lines:
+        for line in output.split('\n'):
             line = line.strip()
-            if re.match(r'^(DESCRIPTION\s+\d+|\d+\.?)\s*:', line, re.IGNORECASE):
-                colon_idx = line.find(':')
-                if colon_idx != -1:
-                    description = line[colon_idx + 1:].strip()
-                    if description:
-                        descriptions.append(description)
-            elif line and not line.startswith('DESCRIPTION') and len(line) > 10:
-                descriptions.append(line)
-        
-        return descriptions[:self.N_DESCRIPTIONS]
-    
-    def _normalize_entity_name(self, entity_text: str) -> List[str]:
-        """
-        Generate normalized variations of entity name for better candidate matching.
-        Handles different languages, naming conventions, and common variations.
-        """
-        normalized_names = [entity_text]  # Always include original
-        
-        # Basic normalization
-        entity_lower = entity_text.lower().strip()
-        if entity_lower != entity_text:
-            normalized_names.append(entity_lower)
-        
-        # Remove common punctuation and special characters
-        entity_cleaned = re.sub(r'[^\w\s-]', ' ', entity_text)
-        entity_cleaned = ' '.join(entity_cleaned.split())  # Clean whitespace
-        if entity_cleaned != entity_text:
-            normalized_names.append(entity_cleaned)
-        
-        # Try common medical term variations
-        # Example: "Type 2 Diabetes" -> "type 2 diabetes mellitus", "diabetes mellitus type 2"
-        if any(term in entity_lower for term in ['diabetes', 'cancer', 'syndrome', 'disease', 'disorder']):
-            # Add "disease" suffix if not present
-            if not any(suffix in entity_lower for suffix in ['disease', 'syndrome', 'disorder', 'cancer']):
-                normalized_names.append(f"{entity_text} disease")
-            
-            # Try reordering for "Type X" patterns
-            type_match = re.match(r'(type\s+\d+)\s+(.*)', entity_lower, re.IGNORECASE)
-            if type_match:
-                type_part, rest = type_match.groups()
-                normalized_names.append(f"{rest} {type_part}")
-        
-        # Try LLM-based name normalization if available
-        if self.llm_client and (self.llm_client.model or self.llm_client.gemini_model):
-            try:
-                prompt = f"""
-ENTITY: "{entity_text}"
-
-TASK: Suggest 2-3 alternative names or variations for this entity that might appear in a medical ontology.
-
-INSTRUCTIONS:
-1. Consider medical terminology variations
-2. Include both formal and common names
-3. Consider language variations (Latin, English)
-4. Keep it short - just the alternative names
-
-OUTPUT FORMAT:
-ALT 1: [alternative name]
-ALT 2: [alternative name]
-ALT 3: [alternative name]
-
-Example for "Type 2 Diabetes":
-ALT 1: type 2 diabetes mellitus
-ALT 2: diabetes mellitus type 2
-ALT 3: non-insulin-dependent diabetes
-"""
-                messages = [{"role": "user", "content": prompt}]
-                response = self.llm_client.call(messages, max_tokens=128)
-                
-                # Parse alternative names
-                for line in response.strip().split('\n'):
-                    if line.strip().startswith('ALT'):
-                        match = re.match(r'ALT\s+\d+:\s*(.+)', line.strip(), re.IGNORECASE)
-                        if match:
-                            alt_name = match.group(1).strip()
-                            if alt_name and len(alt_name) > 2:
-                                normalized_names.append(alt_name)
-            except Exception as e:
-                logger.debug(f"Error in LLM name normalization: {e}")
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_names = []
-        for name in normalized_names:
-            name_lower = name.lower()
-            if name_lower not in seen:
-                seen.add(name_lower)
-                unique_names.append(name)
-        
-        logger.debug(f"Normalized '{entity_text}' to {len(unique_names)} variations: {unique_names[:3]}...")
-        return unique_names
-    
-    def _search_candidates(self, node: GraphNode):
-        """Search for entity candidates"""
-        # Normalize entity name to handle language/naming variations
-        normalized_names = self._normalize_entity_name(node.entity_text)
-        
-        # Use normalized names, original text, and descriptions to search
-        search_queries = normalized_names + node.descriptions
-        all_candidates = []
-        
-        for query in search_queries:
-            if len(query) < 2:
+            if not line:
                 continue
             
-            # Get candidates from entity database
-            candidates = self.entity_db.get_candidates(query)
+            # Try to find ENTITY ID (case-insensitive, handle variations)
+            if entity_id is None:
+                # Try different formats
+                if line.upper().startswith('ENTITY ID:'):
+                    entity_id = line.split(':', 1)[1].strip()
+                elif line.upper().startswith('ENTITY ID'):
+                    # Handle "ENTITY ID" without colon
+                    parts = line.split(None, 2)
+                    if len(parts) >= 3:
+                        entity_id = parts[2].strip()
+                elif 'ENTITY' in line.upper() and 'ID' in line.upper():
+                    # Try to extract ID from various formats
+                    match = re.search(r'(?:ENTITY\s+ID[:\s]+|ID[:\s]+)([^\s]+)', line, re.IGNORECASE)
+                    if match:
+                        entity_id = match.group(1).strip()
             
-            # Convert to dict format with title and description
-            for entity_id in candidates:
-                entity_name = self.entity_db.get_entity_name(entity_id)
-                if entity_name and entity_name != "Unknown":
-                    all_candidates.append({
-                        'id': entity_id,
-                        'title': entity_name,
-                        'description': f"Entity: {entity_name}",
-                        'score': self.entity_db.get_sitelink_count(entity_id)
-                    })
-                else:
-                    logger.debug(f"  Skipping candidate {entity_id}: entity_name={entity_name}")
-        
-        # Remove duplicates and sort by score
-        seen_ids = set()
-        unique_candidates = []
-        for candidate in sorted(all_candidates, key=lambda x: x.get('score', 0), reverse=True):
-            if candidate['id'] not in seen_ids:
-                unique_candidates.append(candidate)
-                seen_ids.add(candidate['id'])
-                if len(unique_candidates) >= self.K_SEARCH * 2:
-                    break
-        
-        node.candidates = unique_candidates
-        if not unique_candidates:
-            # Check if entity looks like a healthcare term
-            entity_lower = node.entity_text.lower()
-            healthcare_keywords = [
-                'disease', 'syndrome', 'cancer', 'tumor', 'tumour', 'carcinoma', 'sarcoma',
-                'diabetes', 'fever', 'pain', 'inflammation', 'infection', 'virus', 'bacteria',
-                'disorder', 'condition', 'illness', 'symptom', 'sign', 'diagnosis', 'treatment',
-                'therapy', 'medication', 'drug', 'pathology', 'lesion', 'malformation', 'anomaly'
-            ]
-            is_healthcare_term = any(keyword in entity_lower for keyword in healthcare_keywords)
+            # Try to find CONFIDENCE (case-insensitive, handle variations)
+            if confidence is None:
+                # Try different formats
+                if line.upper().startswith('CONFIDENCE:'):
+                    try:
+                        confidence = float(line.split(':', 1)[1].strip())
+                    except (ValueError, IndexError):
+                        pass
+                elif line.upper().startswith('CONFIDENCE'):
+                    # Handle "CONFIDENCE" without colon
+                    parts = line.split(None, 1)
+                    if len(parts) >= 2:
+                        try:
+                            confidence = float(parts[1].strip())
+                        except ValueError:
+                            pass
+                elif 'CONFIDENCE' in line.upper():
+                    # Try to extract confidence from various formats
+                    match = re.search(r'(?:CONFIDENCE[:\s]+|CONF[:\s]+)([0-9.]+)', line, re.IGNORECASE)
+                    if match:
+                        try:
+                            confidence = float(match.group(1).strip())
+                        except ValueError:
+                            pass
             
-            if is_healthcare_term:
-                # This might be a healthcare entity, so log as warning
-                logger.warning(f"No candidates found for healthcare entity '{node.entity_text}' with queries: {search_queries}")
-                # Debug: check what get_candidates returns
-                for query in search_queries:
-                    if len(query) >= 2:
-                        candidates = self.entity_db.get_candidates(query)
-                        logger.warning(f"  Query '{query}' -> {len(candidates)} candidates from get_candidates()")
-                        if candidates:
-                            sample_id = list(candidates)[0]
-                            entity_name = self.entity_db.get_entity_name(sample_id)
-                            logger.warning(f"    Sample candidate: {sample_id} -> name={entity_name}")
-            else:
-                # Not a healthcare term, so just debug log (expected to have no candidates)
-                logger.debug(f"No candidates found for non-healthcare entity '{node.entity_text}' (expected)")
+            # Stop if we found both
+            if entity_id is not None and confidence is not None:
+                break
+        
+        # Validate and normalize
+        if entity_id:
+            entity_id = entity_id.strip()
+            # Handle <NIL> or None cases
+            if entity_id.upper() in ['<NIL>', 'NIL', 'NONE', 'NULL', '']:
+                entity_id = None
+        
+        # Validate confidence
+        if confidence is not None:
+            try:
+                confidence = float(confidence)
+                # Clamp to 0.0-1.0 range
+                confidence = max(0.0, min(1.0, confidence))
+            except (ValueError, TypeError):
+                confidence = 0.0
         else:
-            logger.debug(f"Found {len(unique_candidates)} candidates for entity '{node.entity_text}'")
+            confidence = 0.0
+        
+        return entity_id, confidence
+
+
+    def _get_candidates_for_entities(self, entities: List[Dict]) -> List[Dict]:
+        """Get candidates for all entities efficiently"""
+        candidate_prompts = []
+        confirmed_entities = [i for i in entities if i['confidence'] > self.HIGH_CONFIDENCE_THRESHOLD]
+        unconfirmed_entities = [i for i in entities if i['confidence'] <= self.HIGH_CONFIDENCE_THRESHOLD]
+        for ent_idx, entity in enumerate(unconfirmed_entities):
+            entity_names = [entity['text']] + entity['aliases']
+            candidates = set.union(*[self.entity_db.get_candidates(entity_name) for entity_name in entity_names])
+            
+            candidate_dicts = []
+            if candidates:
+                for entity_id in list(candidates)[:self.K_SEARCH]:
+                    entity_name = self.entity_db.get_entity_name(entity_id)
+                    description = self.entity_db.get_entity_description(entity_id)
+                    aliases = self.entity_db.get_entity_aliases(entity_id)
+                    if entity_name and entity_name != "Unknown":
+                        candidate_dicts.append({
+                            'id': entity_id,
+                            'title': entity_name,
+                            'description': description,
+                            'aliases': aliases,
+                        })
+            
+            unconfirmed_entities[ent_idx]['candidates'] = candidate_dicts
+            candidate_prompts.append(self._create_linking_prompt(entity, candidate_dicts, confirmed_entities or None))
+
+        # Only call batch if we have prompts to process
+        if candidate_prompts and self.llm_client:
+            outputs = self.llm_client.call_batch(candidate_prompts)
+            linked_results = [self._parse_linked_entity(i) for i in outputs]
+        else:
+            linked_results = [(None, 0.0)] * len(unconfirmed_entities)
+
+        for i in range(len(unconfirmed_entities)):
+            confidence = linked_results[i][1]
+            if confidence and confidence < self.HIGH_CONFIDENCE_THRESHOLD:
+                continue
+            entity_id = linked_results[i][0]
+            if entity_id:
+                unconfirmed_entities[i]['confidence'] = confidence
+                entity_canonical_name = self.entity_db.get_entity_name(entity_id)
+                entity_aliases = self.entity_db.get_entity_aliases(entity_id)
+                entity_description = self.entity_db.get_entity_description(entity_id)
+                unconfirmed_entities[i]['link_entities'] = {
+                    'id': entity_id,
+                    'title': entity_canonical_name,
+                    'description': entity_description,
+                    'aliases': entity_aliases,
+                }
+
+        return confirmed_entities + unconfirmed_entities
+
     
-    def _select_best_candidate(self, node: GraphNode) -> Optional[str]:
-        """Select best candidate using LLM ranking"""
-        if not node.candidates:
-            return None
+    def _create_linking_prompt(self, entity: Dict, candidates: List[Dict], other_entities: List[Dict] = None) -> List[Dict]:
+        """Create disambiguation prompt for a single entity with context"""
+        context = f"{entity['context_left']} ###{entity['text']}### {entity['context_right']}"
+        context = ' '.join(context.split())
         
-        if len(node.candidates) == 1:
-            return node.candidates[0]['id']
-        
-        if not self.llm_client or (not self.llm_client.model and not self.llm_client.gemini_model):
-            # Fallback: select highest scoring candidate
-            best = max(node.candidates, key=lambda x: x.get('score', 0))
-            return best['id']
-        
-        try:
-            # Use LLM to rank candidates
-            prompt = f"""
-KNOWLEDGE BASE: Human Disease Ontology (DOID)
-TASK: Medical Entity Disambiguation
+        prompt = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
+TASK: Link Medical Mention to DOID Disease
 
-=== ENTITY MENTION ===
-Mention: "{node.entity_text}"
-Clinical Context: "...{node.context_left} {node.entity_text} {node.context_right}..."
-
-=== CANDIDATE DISEASES FROM DOID ===
-"""
-            
-            for i, candidate in enumerate(node.candidates[:self.T_MAX]):
-                prompt += f"{i+1}. {candidate['title']} - {candidate['description'][:150]}\n"
-            
-            prompt += f"""
+=== MEDICAL MENTION ===
+Mention: {entity['text']}
+Context: {context}"""
+        
+        # Add information about other entities detected (for context)
+        if other_entities:
+            other_entities_info = []
+            for e in other_entities:
+                if isinstance(e, dict) and e.get('text') != entity['text']:
+                    link_info = e.get('link_entities', {})
+                    if link_info.get('id'):
+                        other_entities_info.append(
+                            f"{e['text']} is linked to {link_info.get('title', 'Unknown')} ({link_info['id']}): {link_info.get('description', '')[:100]}"
+                        )
+            if other_entities_info:
+                prompt += f"\nOther medical entities in text:\n- " + "\n- ".join(other_entities_info[:5])
+        
+        prompt += "\n\n=== CANDIDATE DISEASES ===\n"
+        
+        for i, candidate in enumerate(candidates[:self.T_MAX]):
+            candidate_id = candidate.get('id', 'N/A')
+            candidate_title = candidate.get('title', 'Unknown')
+            candidate_desc = candidate.get('description', '')[:100] if candidate.get('description') else ''
+            prompt += f"{i+1}. {candidate_title} (ID: {candidate_id})"
+            if candidate_desc:
+                prompt += f"\n   Description: {candidate_desc}"
+            prompt += "\n"
+        
+        prompt += f"""
 === YOUR TASK ===
-Select the DOID disease entry that best matches the entity mention based on the clinical context.
+Select the disease that best matches the mention in context.
 
-=== SELECTION CRITERIA ===
-1. **Exact Terminology Match**: Does the candidate name match the medical term used?
-   Example: "type 2 diabetes mellitus" matches better than general "diabetes"
+CRITERIA:
+1. Name match: Does the name match the medical term?
+2. Specificity: Is it the right level of detail?
+3. Context fit: Does it fit the clinical context?
 
-2. **Specificity Level**: Is the candidate at the right level of detail?
-   Example: "bacterial pneumonia" vs. "pneumonia" vs. "respiratory infection"
+=== REQUIRED OUTPUT FORMAT ===
+You MUST output in this EXACT format (both fields required):
+ENTITY ID: [candidate_id_from_list_above]
+CONFIDENCE: [confidence_score_between_0.0_and_1.0]
 
-3. **Clinical Context**: Does the candidate fit the medical context provided?
-   Example: "chronic" vs. "acute" forms, "juvenile" vs. "adult-onset"
+Where:
+- ENTITY ID: The exact ID from the candidate list (e.g., "DOID:12345")
+- CONFIDENCE: A number between 0.0 and 1.0 indicating how confident you are:
+  * 0.9-1.0: Very high confidence (exact match, clear context)
+  * 0.7-0.9: High confidence (good match, some ambiguity)
+  * 0.5-0.7: Medium confidence (partial match, some uncertainty)
+  * 0.0-0.5: Low confidence (weak match, high uncertainty)
 
-4. **Medical Synonyms**: Consider alternative medical terminology
-   Example: "myocardial infarction" = "heart attack"
+=== CRITICAL: FORMAT EXAMPLE ===
+If candidate #2 is the best match and you're very confident:
+ENTITY ID: DOID:12345
+CONFIDENCE: 0.95
 
-=== DISEASE HIERARCHY EXAMPLE ===
-Respiratory Disease (general)
-  ├─ Pneumonia (more specific)
-  │   ├─ Bacterial pneumonia (most specific)
-  │   └─ Viral pneumonia (most specific)
-  └─ Bronchitis
+If candidate #1 is a good match but you're moderately confident:
+ENTITY ID: DOID:67890
+CONFIDENCE: 0.75
 
-Choose the most specific match that fits the context.
+If no candidate matches well:
+ENTITY ID: <NIL>
+CONFIDENCE: 0.2
 
-=== OUTPUT FORMAT ===
-BEST: [number]
+=== STRICT REQUIREMENTS ===
+1. MUST output "ENTITY ID: " followed by the candidate ID or "<NIL>"
+2. MUST output "CONFIDENCE: " followed by a number between 0.0 and 1.0
+3. Both lines are REQUIRED
+4. Use exact candidate ID from the list above
+5. Confidence must be a valid float between 0.0 and 1.0
+6. NO additional text, NO explanations, ONLY these two lines
 
-Output only the number (1-{min(self.T_MAX, len(node.candidates))}) of the best DOID candidate.
+=== OUTPUT NOW ===
 """
-            
-            messages = [{"role": "user", "content": prompt}]
-            response = self.llm_client.call(messages, max_tokens=128)
-            
-            # Parse best index
-            best_index = self._parse_best_index(response)
-            if best_index is not None and 1 <= best_index <= len(node.candidates[:self.T_MAX]):
-                return node.candidates[best_index - 1]['id']
-            
-            # Fallback to highest scoring
-            best = max(node.candidates, key=lambda x: x.get('score', 0))
-            return best['id']
-            
-        except Exception as e:
-            logger.warning(f"Error in LLM candidate selection: {e}")
-            # Fallback to highest scoring
-            best = max(node.candidates, key=lambda x: x.get('score', 0))
-            return best['id']
-    
-    def _parse_best_index(self, response: str) -> Optional[int]:
-        """Parse best candidate index from LLM response"""
-        lines = response.strip().split('\n')
-        for line in lines:
-            line = line.strip()
-            if 'BEST:' in line.upper():
-                line = line[line.upper().index('BEST:') + 5:].strip()
-            
-            numbers = re.findall(r'\d+', line)
-            if numbers:
-                try:
-                    return int(numbers[0])
-                except ValueError:
-                    continue
         
-        return None
+        return [{"role": "user", "content": prompt}]
     
     def predict(self,
                 text: str,
                 doc: Optional[Doc] = None,
                 uppercase: Optional[bool] = False) -> Dict[Tuple[int, int], EntityPrediction]:
-        """Predict entities using graph-based approach"""
-        if doc is None:
-            doc = self.model(text)
-        
+        """Predict entities using simplified graph-based approach with batch processing"""        
         predictions = {}
         
-        # Build entity graph
-        graph_nodes = self._build_entity_graph(text, doc)
+        detected_entities = self._detect_entities_with_llm(text)
         
-        # Process each node
-        for node_id, node in graph_nodes.items():
-            # Generate descriptions
-            self._generate_descriptions(node, text)
-            
-            # Search for candidates
-            self._search_candidates(node)
-            
-            # Select best candidate
-            entity_id = self._select_best_candidate(node)
-            
-            if entity_id is None:
-                entity_id = UnknownEntity.NIL.value
-            
-            span = (node.start_pos, node.end_pos)
-            candidates = {c['id'] for c in node.candidates}
+        if not detected_entities:
+            return predictions
+        
+        detected_entities = self._get_candidates_for_entities(detected_entities)
+        detected_entities = self._get_candidates_for_entities(detected_entities)
+        
+        for entity in detected_entities:
+            span = (entity['start_pos'], entity['end_pos'])
+            entity_id = entity.get('link_entities', {}).get('id') or UnknownEntity.NIL.value
+            candidates = {c['id'] for c in entity.get('candidates', [])}
             predictions[span] = EntityPrediction(span, entity_id, candidates)
-        
+
         return predictions
 
 

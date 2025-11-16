@@ -15,40 +15,6 @@
 # Methods: graph-llm, onenet-llm, refined, rel, random, spacy, baseline
 # ============================================================================
 
-# Change to the directory where the job was submitted from
-# This ensures the script works regardless of the user's directory structure
-if [ -n "$SLURM_SUBMIT_DIR" ]; then
-    cd "$SLURM_SUBMIT_DIR"
-    echo "Working directory: $SLURM_SUBMIT_DIR"
-else
-    # Fallback for local testing
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    cd "$SCRIPT_DIR"
-    echo "Working directory: $SCRIPT_DIR"
-fi
-
-# ============================================================================
-# Switch to Wikipedia/Wikidata data
-# ============================================================================
-echo "Switching to Wikipedia/Wikidata data..."
-if [ -L elevant_data ]; then
-    rm elevant_data
-    echo "Removed existing symlink"
-fi
-
-if [ -d elevant_data_wiki ]; then
-    ln -s elevant_data_wiki elevant_data
-    echo "✓ Linked to elevant_data_wiki"
-else
-    echo "ERROR: elevant_data_wiki folder not found!"
-    echo "Please set up data folders according to DATA_SETUP_GUIDE.md"
-    exit 1
-fi
-
-# Verify the symlink
-echo "Current data folder: $(readlink elevant_data)"
-
-# Create logs directory
 mkdir -p logs
 
 # Define methods to evaluate

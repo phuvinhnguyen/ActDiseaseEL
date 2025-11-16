@@ -1,8 +1,8 @@
 {
   "linker_name": "General OneNet LLM",
-  "llm_model_path": "moonshotai/Kimi-K2-Thinking",
+  "llm_model_path": "Qwen/Qwen2.5-7B-Instruct",
   "top_k": 5,
   "shuffle_candidates": true,
-  "experiment_description": "General OneNet-style entity linking using transformers LLM. For Wikipedia/Wikidata entities (not domain-specific)."
+  "experiment_description": "Optimized OneNet-style entity linking with batch processing. For Wikipedia/Wikidata entities."
 }
 

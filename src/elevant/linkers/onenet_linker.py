@@ -1,24 +1,18 @@
 """
 OneNet-style entity linker using transformers LLM
-Based on the onenet_system.py approach from EntityLinking/e2e/systems
+Simplified version with batch processing for faster inference
 """
 import logging
-import json
 import re
 import random
 from typing import Dict, Tuple, Optional, Any, List
 
-import spacy
 from spacy.tokens import Doc
 
 from elevant.linkers.abstract_entity_linker import AbstractEntityLinker
 from elevant.models.entity_prediction import EntityPrediction
 from elevant.models.entity_database import EntityDatabase
-from elevant import settings
-from elevant.settings import NER_IGNORE_TAGS
-from elevant.utils.dates import is_date
-from elevant.utils.knowledge_base_mapper import KnowledgeBaseMapper, UnknownEntity
-import elevant.ner.ner_postprocessing  # import is needed so Python finds the custom factory
+from elevant.utils.knowledge_base_mapper import UnknownEntity
 
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
@@ -33,8 +27,7 @@ class OneNetLinker(AbstractEntityLinker):
                  entity_database: EntityDatabase,
                  config: Dict[str, Any]):
         self.entity_db = entity_database
-        self.model = spacy.load(settings.LARGE_MODEL_NAME, disable=["lemmatizer"])
-        self.model.add_pipe("ner_postprocessor", after="ner")
+        self.model = None
         
         # Get config variables
         self.linker_identifier = config.get("linker_name", "OneNet LLM")
@@ -53,25 +46,17 @@ class OneNetLinker(AbstractEntityLinker):
             else:
                 logger.info(f"Gemini API initialized with model: {model_path}")
         
-        # Ensure required entity databases are loaded for candidate search and scoring
-        # - Names for titles and alias aggregation
-        # - Aliases and name-to-entity mappings for candidate generation
-        # - Hyperlink candidates for popular mention->entity mappings (Wikipedia only)
-        # - Sitelink counts for popularity-based scoring
+        # Ensure required entity databases are loaded
         try:
-            # Only load entity names if not already loaded (e.g., by custom KB)
             if not self.entity_db.entity_name_db:
                 self.entity_db.load_entity_names()
-            # Ensure name_to_entities_db is loaded for get_candidates()
             if not self.entity_db.name_to_entities_db:
                 self.entity_db.load_name_to_entities()
             self.entity_db.load_alias_to_entities()
             
-            # Try to load hyperlink candidates (Wikipedia-specific, may not exist for custom KB)
             try:
                 self.entity_db.load_hyperlink_to_most_popular_candidates()
             except Exception as hyperlink_error:
-                # This is expected for custom knowledge bases
                 logger.debug(f"Hyperlink mappings not available (expected for custom KB): {hyperlink_error}")
             
             self.entity_db.load_sitelink_counts()
@@ -85,218 +70,295 @@ class OneNetLinker(AbstractEntityLinker):
     def has_entity(self, entity_id: str) -> bool:
         return self.entity_db.contains_entity(entity_id)
     
-    def _detect_entities_simple(self, text: str, doc: Doc) -> List[Dict]:
-        """Simple entity detection using spaCy"""
+    def _detect_entities_with_llm(self, text: str) -> List[Dict]:
+        """Use LLM to detect medical entities"""
+        prompt = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
+TASK: Extract Medical Disease Entities
+
+=== ABOUT DOID ===
+DOID contains diseases, syndromes, infections, genetic disorders, cancers, and medical conditions.
+DOID does NOT contain: people, places, organizations, dates, numbers, anatomical parts alone.
+
+=== TEXT ===
+{text}
+
+=== YOUR TASK ===
+Extract ALL disease/medical condition mentions that can be linked to DOID.
+
+=== REQUIRED OUTPUT FORMAT ===
+You MUST output each entity in this EXACT format (all fields required):
+ENTITY: mention text | short surrounding text | alias 1, alias 2, alias 3
+
+Where:
+- mention text: The exact text as it appears in the document
+- short surrounding text: An exact match short surrounding text that contains the mention text
+- alias1,alias2,alias3: Comma-separated list of alternative names/synonyms (at least include the mention text itself)
+
+=== CRITICAL: FORMAT EXAMPLE ===
+If the text contains: "Patient diagnosed with agranulocytosis and leucopenia."
+Then output:
+ENTITY: agranulocytosis | In many cases, agranulocytosis is caused by chemotherapy. | agranulocytosis,agranulocytic angina
+
+If "leucopenia" is mentioned:
+Then output:
+ENTITY: leucopenia | Leucopenia is a condition that occurs when the number of white blood cells in the body is too low. | leucopenia,leukopenia
+
+=== STRICT REQUIREMENTS ===
+1. EVERY line must start with "ENTITY: "
+2. ALL fields are REQUIRED (mention | short surrounding text | aliases)
+3. Use EXACT text from document (case-sensitive and detail specific, like copy from the text) for mention text and short surrounding text, this is the only way to find the exact position of the mention text in the text
+4. Aliases must include at least the mention text itself, following DOID entity name format for exact match
+5. One entity per line, no blank lines between entities
+6. If no entities found, output nothing
+
+=== OUTPUT NOW ===
+"""
+        
+        messages = [{"role": "user", "content": prompt}]
+        response = self.llm_client.call(messages, max_tokens=512)
+        
         entities = []
-        
-        # Non-healthcare entity labels to filter out for DOID
-        NON_HEALTHCARE_LABELS = {
-            "GPE",      # Geopolitical entity (countries, cities, states)
-            "LOC",      # Location (non-geopolitical locations)
-            "PERSON",   # People
-            "ORG",      # Organizations (unless healthcare-related, but hard to filter)
-            "DATE",     # Dates
-            "TIME",     # Times
-            "CARDINAL", # Numbers
-            "ORDINAL",  # Ordinal numbers
-            "MONEY",    # Money
-            "QUANTITY", # Quantities
-            "PERCENT",  # Percentages
-            "EVENT",    # Events
-            "FAC",      # Facilities (buildings, airports, etc.)
-        }
-        
-        for ent in doc.ents:
-            if ent.label_ in NER_IGNORE_TAGS:
-                continue
-            # Filter out non-healthcare entities for custom KB
-            if ent.label_ in NON_HEALTHCARE_LABELS:
-                continue
-            span = (ent.start_char, ent.end_char)
-            snippet = text[span[0]:span[1]]
-            if is_date(snippet):
-                continue
+        for line in response.split('\n'):
+            line = line.strip()
+            if not line or not line.startswith('ENTITY:'): continue
             
-            # Additional filtering: skip if it looks like a location or person name
-            snippet_lower = snippet.lower()
-            if any(word in snippet_lower for word in ['street', 'road', 'avenue', 'park', 'garden', 'hospital', 'clinic']):
-                # Skip if it's clearly a location (unless it's a disease name with these words)
-                if not any(disease_word in snippet_lower for disease_word in ['disease', 'syndrome', 'cancer', 'tumor']):
-                    continue
-            
-            context_left = text[max(0, span[0] - 50):span[0]]
-            context_right = text[span[1]:min(len(text), span[1] + 50)]
-            
-            entities.append({
-                'text': snippet,
-                'start_pos': span[0],
-                'end_pos': span[1],
-                'context_left': context_left,
-                'context_right': context_right
-            })
+            try:
+                parts = line.replace('ENTITY:', '').strip().split('|')
+                if len(parts) < 3: continue
+                
+                mention_text = parts[0].strip()
+                surrounding_text = parts[1].strip()
+                aliases = [i.strip() for i in parts[2].strip().split(',') if i.strip()]
+
+                # Find position of surrounding text in text
+                if len(text.split(mention_text)) > 2:
+                    start_pos_surrounding = text.find(surrounding_text)
+                    start_pos = text.find(mention_text, start_pos_surrounding - 1)
+                else:
+                    start_pos = text.find(mention_text)
+
+                entities.append({
+                    'text': mention_text,
+                    'start_pos': start_pos,
+                    'end_pos': start_pos + len(mention_text),
+                    'context_left': text[:start_pos],
+                    'context_right': text[start_pos + len(mention_text):],
+                    'aliases': aliases,
+                    'link_entities': {},
+                    'confidence': 0.0,
+                    'candidates': []
+                })
+            except Exception as e:
+                logger.warning(f"Error parsing entity line '{line}': {e}")
+                continue
         
         return entities
     
-    def _create_onenet_prompt(self, entity: Dict, candidates: List[Dict]) -> str:
-        """Create OneNet-style prompt for DOID entity linking"""
-        # Format context similar to OneNet
-        context = f"{entity['context_left']} ###{entity['text']}### {entity['context_right']}"
-        context = ' '.join(context.split())  # Clean whitespace
+
+    def _parse_linked_entity(self, output: str) -> tuple:
+        """Parse entity ID and confidence from LLM output"""
+        entity_id = None
+        confidence = None
         
-        # Shuffle candidates like OneNet does if enabled
+        for line in output.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            
+            if entity_id is None:
+                if line.upper().startswith('ENTITY ID:'):
+                    entity_id = line.split(':', 1)[1].strip()
+                elif line.upper().startswith('ENTITY ID'):
+                    parts = line.split(None, 2)
+                    if len(parts) >= 3:
+                        entity_id = parts[2].strip()
+                elif 'ENTITY' in line.upper() and 'ID' in line.upper():
+                    match = re.search(r'(?:ENTITY\s+ID[:\s]+|ID[:\s]+)([^\s]+)', line, re.IGNORECASE)
+                    if match:
+                        entity_id = match.group(1).strip()
+            
+            if confidence is None:
+                if line.upper().startswith('CONFIDENCE:'):
+                    try:
+                        confidence = float(line.split(':', 1)[1].strip())
+                    except (ValueError, IndexError):
+                        pass
+                elif line.upper().startswith('CONFIDENCE'):
+                    parts = line.split(None, 1)
+                    if len(parts) >= 2:
+                        try:
+                            confidence = float(parts[1].strip())
+                        except ValueError:
+                            pass
+                elif 'CONFIDENCE' in line.upper():
+                    match = re.search(r'(?:CONFIDENCE[:\s]+|CONF[:\s]+)([0-9.]+)', line, re.IGNORECASE)
+                    if match:
+                        try:
+                            confidence = float(match.group(1).strip())
+                        except ValueError:
+                            pass
+            
+            if entity_id is not None and confidence is not None:
+                break
+        
+        if entity_id:
+            entity_id = entity_id.strip()
+            if entity_id.upper() in ['<NIL>', 'NIL', 'NONE', 'NULL', '']:
+                entity_id = None
+        
+        if confidence is not None:
+            try:
+                confidence = float(confidence)
+                confidence = max(0.0, min(1.0, confidence))
+            except (ValueError, TypeError):
+                confidence = 0.0
+        else:
+            confidence = 0.0
+        
+        return entity_id, confidence
+
+    def _get_candidates_for_entities(self, entities: List[Dict]) -> List[Dict]:
+        """Get candidates and link entities"""
+        candidate_prompts = []
+        
+        for ent_idx, entity in enumerate(entities):
+            entity_names = [entity['text']] + entity.get('aliases', [])
+            candidates = set.union(*[self.entity_db.get_candidates(name) for name in entity_names])
+            
+            candidate_dicts = []
+            if candidates:
+                for entity_id in list(candidates)[:self.top_k]:
+                    entity_name = self.entity_db.get_entity_name(entity_id)
+                    description = self.entity_db.get_entity_description(entity_id)
+                    if entity_name and entity_name != "Unknown":
+                        candidate_dicts.append({
+                            'id': entity_id,
+                            'title': entity_name,
+                            'description': description or f"Entity: {entity_name}",
+                        })
+            
+            # Sort by score
+            candidate_dicts.sort(key=lambda x: self.entity_db.get_sitelink_count(x['id']), reverse=True)
+            entities[ent_idx]['candidates'] = candidate_dicts
+            
+            if candidate_dicts and self.llm_client:
+                candidate_prompts.append(self._create_linking_prompt(entity, candidate_dicts))
+            else:
+                candidate_prompts.append(None)
+
+        if any(p is not None for p in candidate_prompts) and self.llm_client:
+            outputs = self.llm_client.call_batch([p for p in candidate_prompts if p is not None], max_tokens=512)
+            linked_results = [self._parse_linked_entity(o) for o in outputs]
+            
+            output_idx = 0
+            for i, prompt in enumerate(candidate_prompts):
+                if prompt is not None:
+                    entity_id, confidence = linked_results[output_idx]
+                    output_idx += 1
+                    if entity_id:
+                        entities[i]['link_entities'] = {'id': entity_id}
+                elif entities[i]['candidates']:
+                    # Fallback to first candidate
+                    entities[i]['link_entities'] = {'id': entities[i]['candidates'][0]['id']}
+
+        return entities
+
+    def _create_linking_prompt(self, entity: Dict, candidates: List[Dict]) -> List[Dict]:
+        """Create OneNet-style prompt for DOID entity linking"""
+        context = f"{entity['context_left']} ###{entity['text']}### {entity['context_right']}"
+        context = ' '.join(context.split())
+        
+        # Shuffle candidates if enabled
         if self.shuffle_candidates:
             shuffled_candidates = random.sample(candidates, len(candidates))
         else:
             shuffled_candidates = candidates
         
-        content = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
-TASK: Link Medical Mention to DOID Disease Entry
+        prompt = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
+TASK: Link Medical Mention to DOID Disease
 
 === MEDICAL MENTION ===
 Mention: {entity['text']}
-Clinical Context: {context}
+Context: {context}
 
-=== DOID CANDIDATE DISEASES ===
+=== CANDIDATE DISEASES ===
 """
         
-        # Add candidates
-        for i, candidate in enumerate(shuffled_candidates):
-            entity_info = f"{candidate['title']}. {candidate['description'][:200]}..."
-            content += f"Entity {i+1}: {entity_info}\n"
+        for i, candidate in enumerate(shuffled_candidates[:self.top_k]):
+            candidate_id = candidate.get('id', 'N/A')
+            candidate_title = candidate.get('title', 'Unknown')
+            candidate_desc = candidate.get('description', '')[:100] if candidate.get('description') else ''
+            prompt += f"{i+1}. {candidate_title} (ID: {candidate_id})"
+            if candidate_desc:
+                prompt += f"\n   Description: {candidate_desc}"
+            prompt += "\n"
         
-        content += """
+        prompt += f"""
 === YOUR TASK ===
-Select which DOID disease entry best matches the medical mention in the given clinical context.
+Select the disease that best matches the mention in context.
 
-=== MATCHING CRITERIA ===
-1. **Exact Name Match**: Does the candidate match the disease name used?
-2. **Medical Terminology**: Consider medical synonyms and alternative names
-3. **Specificity**: Match the appropriate level of detail (specific vs. general)
-4. **Clinical Context**: Does it fit the medical scenario described?
+CRITERIA:
+1. Name match: Does the name match the medical term?
+2. Specificity: Is it the right level of detail?
+3. Context fit: Does it fit the clinical context?
 
-IMPORTANT: Output ONLY the entity number (1, 2, 3, etc.) of the best match.
+=== REQUIRED OUTPUT FORMAT ===
+You MUST output in this EXACT format (both fields required):
+ENTITY ID: [candidate_id_from_list_above]
+CONFIDENCE: [confidence_score_between_0.0_and_1.0]
 
-=== OUTPUT FORMAT ===
-Answer: [number]
+Where:
+- ENTITY ID: The exact ID from the candidate list (e.g., "DOID:12345")
+- CONFIDENCE: A number between 0.0 and 1.0 indicating how confident you are:
+  * 0.9-1.0: Very high confidence (exact match, clear context)
+  * 0.7-0.9: High confidence (good match, some ambiguity)
+  * 0.5-0.7: Medium confidence (partial match, some uncertainty)
+  * 0.0-0.5: Low confidence (weak match, high uncertainty)
 
-Example: If Entity 2 is the best match, output: Answer: 2
+=== CRITICAL: FORMAT EXAMPLE ===
+If candidate #2 is the best match and you're very confident:
+ENTITY ID: DOID:12345
+CONFIDENCE: 0.95
+
+If candidate #1 is a good match but you're moderately confident:
+ENTITY ID: DOID:67890
+CONFIDENCE: 0.75
+
+If no candidate matches well:
+ENTITY ID: <NIL>
+CONFIDENCE: 0.2
+
+=== STRICT REQUIREMENTS ===
+1. MUST output "ENTITY ID: " followed by the candidate ID or "<NIL>"
+2. MUST output "CONFIDENCE: " followed by a number between 0.0 and 1.0
+3. Both lines are REQUIRED
+4. Use exact candidate ID from the list above
+5. Confidence must be a valid float between 0.0 and 1.0
+6. NO additional text, NO explanations, ONLY these two lines
+
+=== OUTPUT NOW ===
 """
         
-        return content
-    
-    def _parse_onenet_response(self, response: str, candidates: List[Dict]) -> Optional[Dict]:
-        """Parse OneNet LLM response"""
-        response_lower = response.strip().lower()
-        
-        # Try to find entity name in response
-        for candidate in candidates:
-            candidate_name = candidate['title'].lower()
-            if candidate_name in response_lower:
-                return candidate
-        
-        # Try to parse JSON-like response
-        json_match = re.search(r'\{.*\}', response)
-        if json_match:
-            try:
-                json_str = json.loads(json_match.group())
-                for key, value in json_str.items():
-                    if isinstance(value, str):
-                        for candidate in candidates:
-                            if candidate['title'].lower() == value.lower():
-                                return candidate
-            except:
-                pass
-        
-        # Try to find entity by number (Entity 1, Entity 2, etc.)
-        number_match = re.search(r'entity\s*(\d+)', response_lower)
-        if number_match:
-            try:
-                entity_num = int(number_match.group(1))
-                if 1 <= entity_num <= len(candidates):
-                    return candidates[entity_num - 1]
-            except:
-                pass
-        
-        return None
-    
-    def _link_single_entity_onenet(self, entity: Dict) -> Optional[str]:
-        """Link a single entity using OneNet approach"""
-        # Get candidates from database
-        candidates = self.entity_db.get_candidates(entity['text'])
-        
-        if not candidates:
-            return None
-        
-        # Convert to dict format
-        candidate_dicts = []
-        for entity_id in list(candidates)[:self.top_k]:
-            entity_name = self.entity_db.get_entity_name(entity_id)
-            if entity_name:
-                candidate_dicts.append({
-                    'id': entity_id,
-                    'title': entity_name,
-                    'description': f"Entity: {entity_name}",
-                    'score': self.entity_db.get_sitelink_count(entity_id)
-                })
-        
-        if not candidate_dicts:
-            return None
-        
-        # Sort by score
-        candidate_dicts.sort(key=lambda x: x.get('score', 0), reverse=True)
-        
-        # If no LLM client, return best candidate
-        if not self.llm_client or (not self.llm_client.model and not self.llm_client.gemini_model):
-            return candidate_dicts[0]['id']
-        
-        # Create OneNet-style prompt
-        prompt = self._create_onenet_prompt(entity, candidate_dicts)
-        
-        try:
-            # Get LLM response
-            messages = [{"role": "user", "content": prompt}]
-            response = self.llm_client.call(messages, max_tokens=512)
-            
-            # Parse response and select entity
-            selected_entity = self._parse_onenet_response(response, candidate_dicts)
-            
-            if selected_entity:
-                return selected_entity['id']
-            else:
-                # Fallback to first candidate
-                return candidate_dicts[0]['id']
-                
-        except Exception as e:
-            logger.warning(f"Error in OneNet linking: {e}")
-            # Fallback to first candidate
-            return candidate_dicts[0]['id']
+        return [{"role": "user", "content": prompt}]
     
     def predict(self,
                 text: str,
                 doc: Optional[Doc] = None,
                 uppercase: Optional[bool] = False) -> Dict[Tuple[int, int], EntityPrediction]:
-        """Predict entities using OneNet approach"""
-        if doc is None:
-            doc = self.model(text)
-        
+        """Predict entities using OneNet approach with batch processing"""
         predictions = {}
         
-        # Detect entities
-        detected_entities = self._detect_entities_simple(text, doc)
+        detected_entities = self._detect_entities_with_llm(text)
         
-        # Link each detected entity
+        if not detected_entities:
+            return predictions
+        
+        detected_entities = self._get_candidates_for_entities(detected_entities)
+        
         for entity in detected_entities:
-            entity_id = self._link_single_entity_onenet(entity)
-            
-            if entity_id is None:
-                entity_id = UnknownEntity.NIL.value
-            
             span = (entity['start_pos'], entity['end_pos'])
-            
-            # Get candidates for the span
-            candidates = self.entity_db.get_candidates(entity['text'])
+            entity_id = entity.get('link_entities', {}).get('id') or UnknownEntity.NIL.value
+            candidates = {c['id'] for c in entity.get('candidates', [])}
             predictions[span] = EntityPrediction(span, entity_id, candidates)
-        
+
         return predictions
-
-

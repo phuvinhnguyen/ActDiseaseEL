@@ -5,7 +5,7 @@ DIM := \033[2m
 RED := \033[31m
 RESET := \033[0m
 
-DATA_DIR = /tmp/elevant_data
+DATA_DIR = /media/volume/LLMRag2/.local/ActDiseaseEL/elevant_data
 
 WIKIPEDIA_ARTICLES_DIR = ${DATA_DIR}/wikipedia-articles/
 WIKI_DUMP = ${WIKIPEDIA_ARTICLES_DIR}enwiki-latest-pages-articles-multistream.xml.bz2

@@ -161,8 +161,8 @@ class LLMClient:
             # - "8bit": Force 8-bit quantization (requires GPU + bitsandbytes)
             # - "none": No quantization, load full precision model
             # - "auto" or empty: Auto-select based on available memory
-            # Default: "none" (pure model without quantization)
-            quant_pref = (os.getenv('LLM_QUANT', 'none') or 'none').strip().lower()
+            # Default: "4bit" (pure model with 4-bit quantization)
+            quant_pref = (os.getenv('LLM_QUANT', '4bit') or '4bit').strip().lower()
             
             # Only use quantization if explicitly requested AND bitsandbytes is available
             use_4bit = self.device == 'cuda' and BNB_AVAILABLE and quant_pref == '4bit'
@@ -250,6 +250,14 @@ class LLMClient:
             return result
         else:
             return self._call_huggingface(messages, max_tokens)
+    
+    def call_batch(self, messages_batch: List[List[Dict[str, str]]], max_tokens: int = 512) -> List[str]:
+        """Make batch LLM calls with automatic fallback"""
+        # Check if we should use Gemini or have fallen back to HuggingFace
+        if self.use_gemini and not self.has_fallen_back:
+            return self._call_gemini_batch(messages_batch, max_tokens)
+        else:
+            return self._call_huggingface_batch(messages_batch, max_tokens)
     
     def _call_gemini(self, messages: List[Dict[str, str]], max_tokens: int = 512) -> str:
         """Make a call using Gemini API with rate limiting"""
@@ -398,6 +406,30 @@ class LLMClient:
             
             return ""
     
+    def _call_gemini_batch(self, messages_batch: List[List[Dict[str, str]]], max_tokens: int = 512) -> List[str]:
+        """Make batch calls using Gemini API (sequential with rate limiting)"""
+        if not self.gemini_model:
+            logger.error("Gemini model not initialized. Cannot make batch calls.")
+            return [""] * len(messages_batch)
+        
+        results = []
+        for messages in messages_batch:
+            result = self._call_gemini(messages, max_tokens)
+            results.append(result)
+            
+            # If we've hit failure threshold, try fallback for remaining items
+            if not result and self.gemini_failure_count >= self.gemini_failure_threshold:
+                logger.warning(f"Gemini failed {self.gemini_failure_count} times during batch. Attempting fallback...")
+                if self._fallback_to_huggingface():
+                    logger.info("Successfully fell back to HuggingFace model for remaining batch items")
+                    # Process remaining items with HuggingFace
+                    remaining_messages = messages_batch[len(results):]
+                    remaining_results = self._call_huggingface_batch(remaining_messages, max_tokens)
+                    results.extend(remaining_results)
+                    break
+        
+        return results
+    
     def _fallback_to_huggingface(self) -> bool:
         """Fallback to HuggingFace model when Gemini persistently fails"""
         if self.has_fallen_back:
@@ -488,7 +520,8 @@ class LLMClient:
                 text = self.tokenizer.apply_chat_template(
                     messages, 
                     tokenize=False, 
-                    add_generation_prompt=True
+                    add_generation_prompt=True,
+                    enable_thinking=False, # For Qwen models, might not work for other models
                 )
             
             inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device if hasattr(self.model, 'device') else self.device)
@@ -512,4 +545,69 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Error in LLM call: {e}")
             return ""
+    
+    def _call_huggingface_batch(self, messages_batch: List[List[Dict[str, str]]], max_tokens: int = 512) -> List[str]:
+        """Make batch calls using HuggingFace model"""
+        if not self.model or not self.tokenizer:
+            logger.error("Model not loaded. Cannot make batch calls.")
+            return [""] * len(messages_batch)
+        
+        # Handle empty batch
+        if not messages_batch:
+            logger.warning("Empty batch provided to _call_huggingface_batch")
+            return []
+        
+        try:
+            # Format all messages as chat templates
+            texts = []
+            for messages in messages_batch:
+                if isinstance(messages, str):
+                    text = messages
+                else:
+                    text = self.tokenizer.apply_chat_template(
+                        messages, 
+                        tokenize=False, 
+                        add_generation_prompt=True,
+                        enable_thinking=False, # For Qwen models, might not work for other models
+                    )
+                texts.append(text)
+            
+            # Tokenize batch with padding
+            inputs = self.tokenizer(
+                texts, 
+                return_tensors="pt", 
+                padding=True,
+                truncation=True
+            ).to(self.model.device if hasattr(self.model, 'device') else self.device)
+            
+            # Generate for batch
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_tokens,
+                    do_sample=True,
+                    temperature=0.7,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    top_p=0.9,
+                )
+            
+            # Decode each output
+            responses = []
+            for i, output in enumerate(outputs):
+                # Get the length of input for this batch item
+                input_length = inputs['input_ids'][i].shape[0]
+                # Decode only the generated tokens
+                response = self.tokenizer.decode(
+                    output[input_length:], 
+                    skip_special_tokens=True
+                )
+                responses.append(response)
+            
+            return responses
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            logger.error(f"Error in batch LLM call: {e}")
+            return [""] * len(messages_batch)
 
