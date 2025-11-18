@@ -315,14 +315,14 @@ class EntityDatabase:
         
         # Try fuzzy matching if still no candidates
         use_fuzzy = os.getenv('ENTITY_FUZZY_MATCHING', 'true').lower() == 'true'
-        fuzzy_threshold = int(os.getenv('ENTITY_FUZZY_THRESHOLD', '85'))
+        fuzzy_threshold = int(os.getenv('ENTITY_FUZZY_THRESHOLD', '20'))
         
         if not entity_ids and use_fuzzy and FUZZY_AVAILABLE:
             entity_ids = self._fuzzy_search_candidates(alias, threshold=fuzzy_threshold, max_results=10)
         
         return entity_ids
     
-    def _fuzzy_search_candidates(self, query: str, threshold: int = 85, max_results: int = 10) -> Set[str]:
+    def _fuzzy_search_candidates(self, query: str, threshold: int = 0, max_results: int = 10) -> Set[str]:
         """
         Perform fuzzy string matching to find similar entity names/aliases.
         

@@ -122,7 +122,7 @@ ENTITY: Leucopenia | Leucopenia is a condition that occurs when the number of wh
 === STRICT REQUIREMENTS ===
 1. EVERY line must start with "ENTITY: "
 2. ALL fields are REQUIRED (mention | short surrounding text | aliases)
-3. Use EXACT text from document (case-sensitive and detail specific, like copy from the text) for mention text and short surrounding text, this is the only way to find the exact position of the mention text in the text
+3. Use EXACT text from document (case-sensitive and detail specific, like copy everything from the text) for mention text and short surrounding text, this is the only way to find the exact position of the mention text in the text
 4. Aliases must include at least the mention text itself, following DOID entity name format for exact match)
 5. One entity per line, no blank lines between entities
 6. If no entities found, output nothing
@@ -153,6 +153,7 @@ ENTITY: Leucopenia | Leucopenia is a condition that occurs when the number of wh
                     start_pos = text.find(mention_text, start_pos_surrounding - 1)
                 else:
                     start_pos = text.find(mention_text)
+                if start_pos == -1: continue
 
                 entities.append({
                     'text': mention_text,
@@ -298,7 +299,7 @@ ENTITY: Leucopenia | Leucopenia is a condition that occurs when the number of wh
                 unconfirmed_entities[i]['link_entities'] = {
                     'id': entity_id,
                     'title': entity_canonical_name,
-                    'description': entity_description,
+                    'description': entity_description or "",
                     'aliases': entity_aliases,
                 }
 

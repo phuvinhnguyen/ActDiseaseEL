@@ -1,6 +1,6 @@
 {
   "linker_name": "General OneNet LLM",
-  "llm_model_path": "Qwen/Qwen2.5-7B-Instruct",
+  "llm_model_path": "Qwen/Qwen3-8B",
   "top_k": 5,
   "shuffle_candidates": true,
   "experiment_description": "Optimized OneNet-style entity linking with batch processing. For Wikipedia/Wikidata entities."
