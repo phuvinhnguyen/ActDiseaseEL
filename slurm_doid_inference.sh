@@ -52,36 +52,36 @@ echo "  Output: ../doid-results/graph_llm_doid.jsonl"
 echo "  Total time: ${ELAPSED}s"
 echo "  Average per document: ${AVG_TIME}s"
 
-# Run OneNet-LLM (optimized with batch processing)
-echo ""
-echo "----------------------------------------"
-echo "Running OneNet-LLM (DOID) - Optimized with Batch Processing"
-echo "Expected time: ~5-8s per document"
-echo "----------------------------------------"
-START_TIME=$(date +%s)
+# # Run OneNet-LLM (optimized with batch processing)
+# echo ""
+# echo "----------------------------------------"
+# echo "Running OneNet-LLM (DOID) - Optimized with Batch Processing"
+# echo "Expected time: ~5-8s per document"
+# echo "----------------------------------------"
+# START_TIME=$(date +%s)
 
-python link_text.py \
-    "$INPUT_CORPUS" \
-    ../doid-results/onenet_llm_doid.jsonl \
-    -l onenet-llm \
-    --article_format \
-    --custom_kb
+# python link_text.py \
+#     "$INPUT_CORPUS" \
+#     ../doid-results/onenet_llm_doid.jsonl \
+#     -l onenet-llm \
+#     --article_format \
+#     --custom_kb
 
-END_TIME=$(date +%s)
-ELAPSED=$((END_TIME - START_TIME))
-AVG_TIME=$(echo "scale=2; $ELAPSED / $NUM_DOCS" | bc -l)
+# END_TIME=$(date +%s)
+# ELAPSED=$((END_TIME - START_TIME))
+# AVG_TIME=$(echo "scale=2; $ELAPSED / $NUM_DOCS" | bc -l)
 
-echo ""
-echo "✓ OneNet-LLM (DOID) complete"
-echo "  Output: ../doid-results/onenet_llm_doid.jsonl"
-echo "  Total time: ${ELAPSED}s"
-echo "  Average per document: ${AVG_TIME}s"
+# echo ""
+# echo "✓ OneNet-LLM (DOID) complete"
+# echo "  Output: ../doid-results/onenet_llm_doid.jsonl"
+# echo "  Total time: ${ELAPSED}s"
+# echo "  Average per document: ${AVG_TIME}s"
 
-echo ""
-echo "=========================================="
-echo "DOID inference complete"
-echo "End time: $(date)"
-echo "=========================================="
+# echo ""
+# echo "=========================================="
+# echo "DOID inference complete"
+# echo "End time: $(date)"
+# echo "=========================================="
 
 # Summary statistics
 echo ""
@@ -108,29 +108,3 @@ print(total)
     echo "      - $num_articles documents processed"
     echo "      - $num_entities entities linked"
 done
-
-# Performance verification
-echo ""
-echo "Performance Verification:"
-echo "------------------------"
-echo "  Target: < 30s per document"
-echo "  Achieved: Check average times above"
-echo ""
-echo "Optimization Features:"
-echo "  ✓ Batch processing enabled"
-echo "  ✓ Simplified architecture (no graph building)"
-echo "  ✓ 4-bit quantization for speed"
-echo "  ✓ Single LLM call per document"
-
-echo ""
-echo "Next Steps:"
-echo "-----------"
-echo "1. Verify entity linking quality:"
-echo "   python evaluate.py <linked_file.jsonl> <ground_truth.jsonl>"
-echo ""
-echo "2. View sample results:"
-echo "   head -1 ../doid-results/graph_llm_doid.jsonl | python -m json.tool"
-echo ""
-echo "3. Compare methods:"
-echo "   diff <(jq -S . ../doid-results/graph_llm_doid.jsonl) <(jq -S . ../doid-results/onenet_llm_doid.jsonl)"
-

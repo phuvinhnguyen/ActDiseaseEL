@@ -1,1 +1,1 @@
-{"linker_name": "onenet-llm", "linker_config": null, "coreference_linker": null, "minimum_score": 0, "type_mapping": "/media/volume/LLMRag2/.local/ActDiseaseEL/elevant_data/wikidata-mappings/qid_to_whitelist_types.db", "custom_kb": true}
+{"linker_name": "graph-llm", "linker_config": null, "coreference_linker": null, "minimum_score": 0, "type_mapping": "/media/volume/LLMRag2/.local/ActDiseaseEL/elevant_data/wikidata-mappings/qid_to_whitelist_types.db", "custom_kb": true}
