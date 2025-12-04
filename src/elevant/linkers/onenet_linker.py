@@ -1,6 +1,15 @@
 """
 OneNet-style entity linker using transformers LLM
-Simplified version with batch processing for faster inference
+Simplified version with batch processing for faster inference.
+
+This implementation keeps the original OneNet idea:
+- Use an LLM to detect mentions in text
+- Generate candidates for each mention
+- Optionally use the LLM again to pick the best candidate
+
+But instead of getting candidates from `EntityDatabase`, it now follows
+the graph-based linker approach and derives candidates directly from
+the DOID ontology via `find_near_matches_for_span`.
 """
 import logging
 import re
@@ -14,20 +23,29 @@ from elevant.models.entity_prediction import EntityPrediction
 from elevant.models.entity_database import EntityDatabase
 from elevant.utils.knowledge_base_mapper import UnknownEntity
 
+# Re‑use ontology utilities from the graph-based linker
+from elevant.linkers.graph_linker import parse_obo_file, find_near_matches_for_span
+
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
 
 class OneNetLinker(AbstractEntityLinker):
     """
     OneNet-style entity linker following onenet_system.py approach
-    Uses transformers LLM instead of API
+    Uses transformers LLM instead of API.
+
+    Entity candidates are discovered using the DOID ontology and
+    `find_near_matches_for_span` (same mechanism as `GraphLinker`),
+    not via `EntityDatabase.get_candidates`.
     """
     
     def __init__(self,
                  entity_database: EntityDatabase,
-                 config: Dict[str, Any]):
+                 config: Dict[str, Any],
+                 obo_path: str = '/media/volume/LLMRag2/.local/HumanDiseaseOntology/src/ontology/doid-merged.obo'):
         self.entity_db = entity_database
         self.model = None
+        self.obo_path = obo_path
         
         # Get config variables
         self.linker_identifier = config.get("linker_name", "OneNet LLM")
@@ -39,35 +57,26 @@ class OneNetLinker(AbstractEntityLinker):
         self.llm_client = LLMClient(model_path) if model_path else None
         
         # For Gemini API, check if model is available
-        if self.llm_client and self.llm_client.use_gemini:
-            if not self.llm_client.gemini_model:
+        if self.llm_client and getattr(self.llm_client, "use_gemini", False):
+            if not getattr(self.llm_client, "gemini_model", None):
                 logger.warning("Gemini model not initialized. LLM features will be disabled.")
                 self.llm_client = None
             else:
                 logger.info(f"Gemini API initialized with model: {model_path}")
         
-        # Ensure required entity databases are loaded
+        # Load ontology matcher from OBO file (same as GraphLinker)
         try:
-            if not self.entity_db.entity_name_db:
-                self.entity_db.load_entity_names()
-            if not self.entity_db.name_to_entities_db:
-                self.entity_db.load_name_to_entities()
-            self.entity_db.load_alias_to_entities()
-            
-            try:
-                self.entity_db.load_hyperlink_to_most_popular_candidates()
-            except Exception as hyperlink_error:
-                logger.debug(f"Hyperlink mappings not available (expected for custom KB): {hyperlink_error}")
-            
-            self.entity_db.load_sitelink_counts()
+            self.entities_matcher = parse_obo_file(self.obo_path)
         except Exception as e:
-            logger.warning(f"Error while loading entity databases: {e}")
-
+            logger.warning(f"Error while parsing OBO ontology at {self.obo_path}: {e}")
+            self.entities_matcher = None
+        
         # OneNet-specific parameters
         self.top_k = config.get("top_k", 5)
         self.shuffle_candidates = config.get("shuffle_candidates", True)
         
     def has_entity(self, entity_id: str) -> bool:
+        # Keep compatibility with existing `EntityDatabase` checks
         return self.entity_db.contains_entity(entity_id)
     
     def _detect_entities_with_llm(self, text: str) -> List[Dict]:
@@ -218,27 +227,66 @@ ENTITY: leucopenia | Leucopenia is a condition that occurs when the number of wh
         return entity_id, confidence
 
     def _get_candidates_for_entities(self, entities: List[Dict]) -> List[Dict]:
-        """Get candidates and link entities"""
+        """
+        Get candidates and link entities.
+
+        This version mirrors the GraphLinker behaviour for candidate discovery:
+        - Use `find_near_matches_for_span` over the DOID ontology
+        - Do NOT use `self.entity_db.get_candidates`
+        - Keep the OneNet pipeline structure (LLM can still re-rank/pick)
+        """
         candidate_prompts = []
+        
+        if not self.entities_matcher:
+            logger.warning("Ontology matcher not initialized; no candidates will be generated.")
+        
+        # Unpack ontology matcher (see `graph_linker.parse_obo_file`)
+        if self.entities_matcher:
+            _, term_to_entities, sym_spell = self.entities_matcher
+        else:
+            term_to_entities, sym_spell = {}, None
         
         for ent_idx, entity in enumerate(entities):
             entity_names = [entity['text']] + entity.get('aliases', [])
-            candidates = set.union(*[self.entity_db.get_candidates(name) for name in entity_names])
+            candidate_dicts: List[Dict[str, Any]] = []
             
-            candidate_dicts = []
-            if candidates:
-                for entity_id in list(candidates)[:self.top_k]:
-                    entity_name = self.entity_db.get_entity_name(entity_id)
-                    description = self.entity_db.get_entity_description(entity_id)
-                    if entity_name and entity_name != "Unknown":
-                        candidate_dicts.append({
-                            'id': entity_id,
-                            'title': entity_name,
-                            'description': description or f"Entity: {entity_name}",
-                        })
+            # Use ontology-based fuzzy matching to get DOID candidates
+            if term_to_entities and sym_spell:
+                seen_ids = set()
+                for name in entity_names:
+                    name = name.strip()
+                    if not name:
+                        continue
+                    try:
+                        near_matches = find_near_matches_for_span(
+                            name,
+                            term_to_entities,
+                            sym_spell,
+                            top_k=self.top_k,
+                            min_confidence=0.7,
+                            min_similarity=0.7,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Error in find_near_matches_for_span for '{name}': {e}")
+                        continue
+                    
+                    for cand in near_matches:
+                        cand_id = cand.get('id')
+                        if not cand_id or cand_id in seen_ids:
+                            continue
+                        seen_ids.add(cand_id)
+                        title = cand.get('name', '')
+                        description = cand.get('def', '')
+                        synonyms = cand.get('synonyms', [])
+                        if synonyms:
+                            description = (description + "\nSynonyms: " + ", ".join(synonyms)).strip()
+                        if title:
+                            candidate_dicts.append({
+                                'id': cand_id,
+                                'title': title,
+                                'description': description or f"Entity: {title}",
+                            })
             
-            # Sort by score
-            candidate_dicts.sort(key=lambda x: self.entity_db.get_sitelink_count(x['id']), reverse=True)
             entities[ent_idx]['candidates'] = candidate_dicts
             
             if candidate_dicts and self.llm_client:
@@ -247,7 +295,10 @@ ENTITY: leucopenia | Leucopenia is a condition that occurs when the number of wh
                 candidate_prompts.append(None)
 
         if any(p is not None for p in candidate_prompts) and self.llm_client:
-            outputs = self.llm_client.call_batch([p for p in candidate_prompts if p is not None], max_tokens=512)
+            outputs = self.llm_client.call_batch(
+                [p for p in candidate_prompts if p is not None],
+                max_tokens=512
+            )
             linked_results = [self._parse_linked_entity(o) for o in outputs]
             
             output_idx = 0
@@ -258,7 +309,7 @@ ENTITY: leucopenia | Leucopenia is a condition that occurs when the number of wh
                     if entity_id:
                         entities[i]['link_entities'] = {'id': entity_id}
                 elif entities[i]['candidates']:
-                    # Fallback to first candidate
+                    # Fallback to first candidate if no LLM decision
                     entities[i]['link_entities'] = {'id': entities[i]['candidates'][0]['id']}
 
         return entities

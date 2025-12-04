@@ -3,9 +3,12 @@ import multiprocessing as mp
 import requests
 import time
 import subprocess
-from typing import List
+import psutil
+import json
+from typing import List, Optional, Dict, Any
 from transformers import AutoTokenizer
 
+# Set multiprocessing method before any imports
 os.environ['VLLM_ENGINE_MP_START_METHOD'] = 'spawn'
 os.environ['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
 
@@ -124,8 +127,7 @@ class LLMClient:
             return self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": prompt}],
                 tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False
+                add_generation_prompt=True
             )
         except Exception as e:
             print(f"⚠️ Failed to apply chat template: {e}. Using raw prompt.")
@@ -182,65 +184,11 @@ class LLMClient:
             except: pass
 
 
-
-# from typing import List, Optional
-# from tqdm import tqdm
-# from vllm import LLM, SamplingParams
-# import torch
-
-# class LLMClient:
-#     def __init__(self, model_name: str, use_4bit: bool = True):
-#         """
-#         Initialize vLLM client with chat template support
-#         """
-#         self.llm = LLM(
-#             model=model_name,
-#             quantization="AWQ" if use_4bit else None,
-#             tensor_parallel_size=torch.cuda.device_count(),
-#             dtype="float16",
-#             trust_remote_code=True
-#         )
-#         self.tokenizer = self.llm.get_tokenizer()
-        
-#         # Check if model has chat template
-#         self.has_chat_template = (
-#             hasattr(self.tokenizer, 'chat_template') and 
-#             self.tokenizer.chat_template is not None
-#         )
-#         if self.has_chat_template:
-#             print(f"✅ Chat template detected. Will auto-format prompts for {model_name}")
+def get_shared_llm_client(model_name: str = None, port: int = None) -> LLMClient:
+    """Get or create shared vLLM client"""
+    if model_name is None:
+        model_name = os.getenv('VLLM_MODEL', 'Orion-zhen/Qwen3-8B-AWQ')
     
-#     def call_batch(
-#         self, 
-#         prompts: List[str], 
-#         max_new_tokens: int = 1024,
-#         temperature: float = 0.1,
-#         verbose: bool = False,
-#         **sampling_kwargs
-#     ) -> List[str]:
-#         if self.has_chat_template:
-#             formatted_prompts = [
-#                 self.tokenizer.apply_chat_template(
-#                     [{"role": "user", "content": prompt}],
-#                     tokenize=False,
-#                     add_generation_prompt=True,
-#                     enable_thinking=False,
-#                 )
-#                 for prompt in prompts
-#             ]
-#         else:
-#             # Raw prompts for base models
-#             formatted_prompts = prompts
-        
-#         sampling_params = SamplingParams(
-#             temperature=temperature,
-#             max_tokens=max_new_tokens,
-#             **sampling_kwargs
-#         )
-        
-#         outputs = self.llm.generate(formatted_prompts, sampling_params)
-#         return [out.outputs[0].text.split('</think>')[-1].strip() for out in outputs]
-    
-#     def call(self, prompt: str, **kwargs) -> str:
-#         """Generate single prompt without progress bar"""
-#         return self.call_batch([prompt], verbose=False, **kwargs)[0]
+    return LLMClient(model_name=model_name, port=port)
+
+client1 = get_shared_llm_client()

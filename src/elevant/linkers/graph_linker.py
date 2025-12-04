@@ -12,6 +12,7 @@ import ahocorasick, difflib, re, nltk
 from symspellpy import SymSpell, Verbosity
 from functools import cache
 from nltk.corpus import stopwords
+import re
 
 try:
     nltk.data.find('corpora/stopwords')
@@ -202,8 +203,19 @@ def extract_spans_with_entities(text: str, entities_matcher: Dict, top_k: int = 
                                min_similarity: float = 0.7) -> Dict:
     automaton, term_to_entities, sym_spell = entities_matcher
     
-    # Generate n-grams (spans) from text
-    words = text.split()
+    # Split text into words and track their positions
+    words = []
+    word_positions = []  # (start_char, end_char) for each word
+    
+    # Tokenize text while preserving positions
+    word_pattern = re.compile(r'\S+')
+    for match in word_pattern.finditer(text):
+        word = match.group()
+        start = match.start()
+        end = match.end()
+        words.append(word)
+        word_positions.append((start, end))
+    
     spans_info = {}
     total_spans_checked = 0
     
@@ -218,11 +230,27 @@ def extract_spans_with_entities(text: str, entities_matcher: Dict, top_k: int = 
             if len(non_stopwords) == 0:
                 continue
             
-            # Find character positions
-            start_char = text.find(span_text)
-            if start_char == -1:
+            # Get exact character positions from word boundaries
+            # Start at the beginning of first word, end at the end of last word
+            start_char = word_positions[i][0]  # Start of first word
+            end_char = word_positions[i + n - 1][1]  # End of last word
+            
+            # Extract the actual text at this position (includes spaces between words)
+            actual_text = text[start_char:end_char]
+            
+            # Normalize both for comparison (handle multiple spaces)
+            actual_words = actual_text.split()
+            span_words_list = span_text.split()
+            
+            # Verify we have the same words in the same order (case-insensitive)
+            if len(actual_words) != len(span_words_list):
                 continue
-            end_char = start_char + len(span_text)
+            if any(aw.lower() != sw.lower() for aw, sw in zip(actual_words, span_words_list)):
+                continue
+            
+            # Use the normalized span_text for entity matching (single spaces)
+            # But store actual_text for display/context
+            span_text_for_matching = ' '.join(actual_words)  # Normalized version
             
             span_key = (start_char, end_char)
             
@@ -230,16 +258,18 @@ def extract_spans_with_entities(text: str, entities_matcher: Dict, top_k: int = 
             if span_key not in spans_info:
                 total_spans_checked += 1
                 # Find near matches for this span with quality filtering
+                # Use normalized text for matching
                 near_entities = find_near_matches_for_span(
-                    span_text, term_to_entities, sym_spell, 
+                    span_text_for_matching, term_to_entities, sym_spell, 
                     top_k=top_k, 
                     min_confidence=min_confidence,
                     min_similarity=min_similarity
                 )
                 
                 if near_entities:  # Only include spans that have high-quality matches
+                    # Store the actual text from the original (preserves original spacing)
                     spans_info[span_key] = {
-                        'span_text': span_text,
+                        'span_text': span_text_for_matching,  # Normalized for consistency
                         'start_char': start_char,
                         'end_char': end_char,
                         'entities': near_entities
@@ -251,15 +281,13 @@ def find_entity_spans_in_text(text: str, obo_path: str, top_k: int = 10,
                              min_span_length: int = 2, max_span_length: int = 4,
                              min_confidence: float = 0.7,
                              min_similarity: float = 0.7) -> Dict:
-    filtered_words = [word for word in text.lower().split() if word not in stopwords.words('english')]
-    processed_text = ' '.join(filtered_words)
-
     # Parse OBO file
     entities = parse_obo_file(obo_path)
     
-    # Extract spans with high-quality entities
+    # Extract spans with high-quality entities - work directly with original text
+    # This ensures positions are correct relative to the original text
     spans_result = extract_spans_with_entities(
-        processed_text, entities, 
+        text, entities, 
         top_k=top_k, 
         min_span_length=min_span_length, 
         max_span_length=max_span_length,
@@ -279,13 +307,15 @@ class GraphLinker(AbstractEntityLinker):
                  entity_database: EntityDatabase,
                  config: Dict[str, Any],
                  obo_path: str = '/media/volume/LLMRag2/.local/HumanDiseaseOntology/src/ontology/doid-merged.obo',
-                 verbose: bool = True
+                 verbose: bool = True,
+                 multilingual: bool = True
                  ):
         self.entity_db = entity_database
         self.model = None
         self.obo_path = obo_path
         self.verbose = verbose
-        
+        self.multilingual = multilingual
+
         # Get config variables
         self.linker_identifier = config.get("linker_name", "Graph LLM")
         self.ner_identifier = self.linker_identifier
@@ -326,11 +356,104 @@ class GraphLinker(AbstractEntityLinker):
     def _log(self, msg: str):
         if self.verbose:
             print(msg)
+
+    def _llm_ner(self, text: str) -> List[Dict]:
+        text_short_chunks = [(i, text[i:i+600]) for i in range(0, len(text), 550)]
+        
+        ner_prompts = '''
+You are a DOID disambiguation expert.  
+For every disease or syndrome mentioned in the text, pick the best English name(s) from DOID/MeSH/ICD-10.
+
+## TEXT  
+"{text}"
+
+## RESPONSE FORMAT RULES  
+CRITICAL: You MUST follow this format:
+- Include reasoning lines to explain your thought process about identifying and mapping entities
+- After reasoning, output each entity on a separate line in the exact format: ENTITY: <exact substring from text>: <English name 1>, <English name 2>, ...
+- You may interleave reasoning with ENTITY lines, but each ENTITY line must be correctly formatted
+- Use the EXACT substring from the text (don't modify spelling/capitalization)
+- Provide English equivalent names separated by commas
+- If no diseases found, output nothing (empty response)
+
+## STEP-BY-STEP PROCESSING:
+1. Read the text carefully and identify ALL disease/syndrome mentions
+2. For each mention, extract the EXACT substring as it appears in text
+3. Map to appropriate English medical terms from DOID/MeSH/ICD-10
+4. Output reasoning followed by ENTITY lines in the required format
+
+## EXAMPLES - PAY CLOSE ATTENTION TO FORMAT:
+
+**Example 1:**
+TEXT: "Den här patienten lider av både diabetes, högt blodtryck och mild depression."
+OUTPUT:
+I know that in this Swedish text, "diabetes" and "mild depression" are similar to same name in English, so I will output the same name for both.
+ENTITY: diabetes: diabetes
+ENTITY: mild depression: mild depression
+"högt blodtryck" is a Swedish word for hypertension (high blood pressure), so I will output the English name for it.
+ENTITY: högt blodtryck: hypertension, high blood pressure  
+
+**Example 2:**
+TEXT: "On diagnostique chez le patient un infarctus du myocarde, une insuffisance cardiaque et un asthme sévère."
+OUTPUT:
+ENTITY: infarctus du myocarde: myocardial infarction, heart attack
+ENTITY: insuffisance cardiaque: heart failure, cardiac failure
+ENTITY: asthme sévère: severe asthma
+
+**Example 3:**
+TEXT: "The patient suffers from MI and CHF."
+OUTPUT:
+I understand that "MI" is a common medical abbreviation for myocardial infarction, which is also known as heart attack. "CHF" stands for congestive heart failure, and it can be referred to as chronic heart failure.
+ENTITY: MI: myocardial infarction, heart attack
+ENTITY: CHF: congestive heart failure, chronic heart failure
+
+**Example 4:**
+TEXT: "No significant medical history noted."
+OUTPUT:
+[After analyzing the text, I find no disease mentions, so I output nothing]
+
+## YOUR TASK:
+Now process the following text. Output ONLY in the specified format, no other text:
+
+TEXT: "{text}"
+'''
+        
+        prompts = [[
+            {"role": "system", "content": "You are a DOID NER expert. For every disease or syndrome mentioned in the text, detect and pick the best English name(s) from DOID/MeSH/ICD-10. Output in the specified format."},
+            {"role": "user", "content": ner_prompts.format(text=text)}
+            ] for _, text in text_short_chunks]
+        responses = self.llm_client.call_batch(prompts)
+        detected_entities = []
+        for (i, text), response in zip(text_short_chunks, responses):
+            for line in response.split('\n'):
+                line = line.strip()
+                if not line or not line.startswith('ENTITY:'): 
+                    continue
+                try:
+                    mention, entity_english_names = line.replace('ENTITY:', '', 1).strip().split(':')
+                    start_pos = i + text.find(mention)
+                    end_pos = start_pos + len(mention)
+
+                    entities = find_entity_spans_in_text(entity_english_names, self.obo_path, top_k=20, min_span_length=2, max_span_length=4, min_confidence=0.6, min_similarity=0.6)
+                    entities = sum([i['entities'] for i in list(entities.values())], [])[:20]
+                    
+                    entity_info = {
+                        'text': mention,
+                        'start_pos': start_pos,
+                        'end_pos': end_pos,
+                        'context_left': text[max(0, start_pos - 500):start_pos],
+                        'context_right': text[end_pos:min(len(text), end_pos + 500)],
+                        'link_entities': {},
+                        'confidence': 0.0,
+                        'candidates': entities
+                    }
+                    detected_entities.append(entity_info)
+                except Exception as e:
+                    continue
+        return detected_entities
     
     def _detect_entities_with_llm(self, text: str) -> List[Dict]:
         """Use LLM to detect medical entities from text"""
-        
-        # Find potential entity spans
         span_dict = find_entity_spans_in_text(
             text, self.obo_path, 
             top_k=20, 
@@ -368,21 +491,28 @@ TASK
 ----
 1. Select ONLY spans that clearly refer to diseases, syndromes, or medical conditions.
 2. Ignore spans that refer to people, places, procedures, dates, numbers, or anatomy alone.
-3. Your respond must contain EXACTLY one line that starts with 'INDEX:' followed by the 1-based indices of valid spans, separated by commas.
+3. Your respond must contain many lines (or one line) that starts with 'INDEX:' followed by the index of valid spans and the corrected (normalized) text of that span (for example, if span is "this", the text after valid index should be the name of entity related to "this" in English).
 4. If no spans qualify, do not provide a line with 'INDEX:' in your answer.
 
 ALLOWED OUTPUT (STRICT)
 -----------------------
 Example 1:
-I believe 1,3, and 5 are diseases.
-INDEX: 3,5,1
+I believe 1 ("this"),3 ("herpas zostar"), and 5 ("pseudomonas") are diseases.
+INDEX: 1: infectious mononucleosis
+INDEX: 3: herpes zoster
+INDEX: 5: pseudomonas
 
 Example 2:
-INDEX: 1,3,5
+After reading the text, I confirm that 1 ("this disease") mentions to szymczak's syndrome.
+INDEX: 1: szymczak's syndrome
 
 Example 3:
-I believe 5,2,3,4, and 1 are diseases.
-INDEX: 1,2,3,4,5
+After reading this Swedish paper, I believe 1 ("denna sjukdom"), 2 ("the disease"), 3 ("infektion"), 4 ("influensa"), and 5 ("lunginflammation") are related to DOID.
+INDEX: 1: pneumonia
+INDEX: 2: infection
+INDEX: 3: infection
+INDEX: 4: influenza
+INDEX: 5: lung inflammation
 
 Different output formats are not allowed.
 """
@@ -398,24 +528,25 @@ Different output formats are not allowed.
             try:
                 # Extract index numbers
                 index_str = line.replace('INDEX:', '').strip()
-                index_numbers = [int(idx.strip()) for idx in index_str.split(',') if idx.strip().isdigit()]
-                
-                for idx in index_numbers:
-                    if 1 <= idx <= len(spans_list):
-                        span = spans_list[idx - 1]  # Convert to 0-based
-                        entity_info = {
-                            'text': span['span_text'],
-                            'start_pos': span['start_char'],
-                            'end_pos': span['end_char'],
-                            'context_left': text[:span['start_char']],
-                            'context_right': text[span['end_char']:],
-                            'link_entities': {},
-                            'confidence': 0.0,
-                            'candidates': span['entities']
-                        }
-                        detected_entities.append(entity_info)
-                    else:
-                        continue
+                idx, index_text = index_str.split(':')
+            
+                if 1 <= idx <= len(spans_list):
+                    span = spans_list[idx - 1]
+                    specific_spans = find_entity_spans_in_text(index_text, self.obo_path, top_k=20, min_span_length=2, max_span_length=3, min_confidence=0.8, min_similarity=0.8)
+                    specific_spans_list = sum([i['entities'] for i in list(specific_spans.values())], [])[:10]
+                    entity_info = {
+                        'text': span['span_text'],
+                        'start_pos': span['start_char'],
+                        'end_pos': span['end_char'],
+                        'context_left': text[max(0, span['start_char'] - 500):span['start_char']],
+                        'context_right': text[span['end_char']:min(len(text), span['end_char'] + 500)],
+                        'link_entities': {},
+                        'confidence': 0.0,
+                        'candidates': specific_spans_list + span['entities']
+                    }
+                    detected_entities.append(entity_info)
+                else:
+                    continue
             except Exception as e:
                 continue
         
@@ -554,14 +685,21 @@ ENTITY: 4: 0.35
         predictions = {}
         
         # Step 1: Detect entities
-        detected_entities = self._detect_entities_with_llm(text)
+        if self.multilingual:
+            print("Using multilingual mode")
+            detected_entities = self._llm_ner(text)
+        else:
+            print("Using non-multilingual mode")
+            detected_entities = self._detect_entities_with_llm(text)
         
         if not detected_entities:
             return predictions
         
-        for _ in range(2): detected_entities = self._get_candidates_for_entities(detected_entities)
+        for _ in range(3): detected_entities = self._get_candidates_for_entities(detected_entities)
         
         for i, entity in enumerate(detected_entities):
+            if entity['confidence'] < self.HIGH_CONFIDENCE_THRESHOLD:
+                continue
             span = (entity['start_pos'], entity['end_pos'])
             entity_id = entity.get('link_entities', {}).get('id') or UnknownEntity.NIL.value
             candidates = {c['id'] for c in entity.get('candidates', [])}            

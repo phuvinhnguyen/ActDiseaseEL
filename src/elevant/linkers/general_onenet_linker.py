@@ -1,11 +1,59 @@
 """
-OneNet-style entity linker using transformers LLM
-Simplified version with batch processing for faster inference
+### **Step 1: Entity Reduction Processor (ERP)**
+- **What it does:** This is the first stage. It takes the **input** (a mention like "fennec fox" and the surrounding text/context) and a long list of possible **candidate entities** that could match that mention.
+- **How it works:** It filters out candidates that are obviously wrong based on the context.  
+  *Example:* If the context says "living in desert regions of North Africa," it will remove candidates like *Arctic Fox* (lives in the cold) or fictional characters like *Nick Wilde*.  
+- **Result:** A shorter, more relevant list of candidate entities (e.g., Red Fox, Rippell’s Fox).
+
+---
+
+### **Step 2: Dual-perspective Entity Linker (DEL)**
+- **What it does:** This step takes the filtered candidates and tries to decide which one is the *correct* match using **two different perspectives**.
+
+  1. **Prior Entity Linker:**  
+     - Asks: *"Based on common knowledge, which entity do people usually mean when they say 'fennec fox'?"*  
+     - Uses general world knowledge (like Wikipedia or common sense) to pick the most likely candidate.
+
+  2. **Contextual Entity Linker:**  
+     - Asks: *"Given the specific context provided, which entity fits best here?"*  
+     - Carefully reads the surrounding text to make a decision.
+
+- **How it works:** The system runs both linkers, compares their answers, and decides on the best candidate.
+
+---
+
+### **Step 3: Entity Consensus Judger (ECJ)**
+- **What it does:** This is the final check to make sure the chosen entity is consistent and correct.
+- **How it works:**
+  - Takes the top candidate(s) from the previous step.
+  - Uses a **Large Language Model (LLM)** to double-check if the choice makes sense with the context.
+  - The **Consistency Algorithm** ensures the explanation is logical.
+  - If everything agrees, the **Merge Module** produces the final answer.
+
+  *Example:*  
+  The LLM might explain: *"Rippell’s fox is correct because it lives in deserts in North Africa, which matches the context."*
+
+---
+
+### **Final Output:**
+- The system outputs the **correctly linked entity** (e.g., *Rippell’s fox*) with a clear explanation.
+
+---
+
+### **In Simple Summary:**
+1. **ERP** → Reduces a big list to a few possible options.  
+2. **DEL** → Looks at the problem from two angles (common knowledge + specific context) to pick one.  
+3. **ECJ** → Double-checks the choice using an LLM to ensure it’s correct and consistent.  
+
+This helps computers understand *which real-world thing* a word refers to, especially when words can mean different things in different situations.
 """
 import logging
 import re
 import random
 import spacy
+import json
+from contextlib import contextmanager
+from tqdm import tqdm
 from typing import Dict, Tuple, Optional, Any, List
 
 from spacy.tokens import Doc
@@ -15,317 +63,561 @@ from elevant.models.entity_prediction import EntityPrediction
 from elevant.models.entity_database import EntityDatabase
 from elevant.utils.knowledge_base_mapper import UnknownEntity
 from elevant.settings import LARGE_MODEL_NAME, NER_IGNORE_TAGS
+from elevant.llm_client import LLMClient
+import requests
+import json
+from functools import cache
 
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
+@cache
+def get_entity_info(qid: str) -> dict:
+    """Get English entity info from Wikidata ID"""
+    qid = qid.strip().upper()
+    try:
+        resp = requests.get(
+            "https://www.wikidata.org/w/api.php",
+            params={
+                "action": "wbgetentities",
+                "ids": qid,
+                "format": "json",
+                "languages": "en",
+                "props": "labels|descriptions|aliases|claims"
+            },
+            headers={"User-Agent": "WikidataBot/1.0"},
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        
+        if "entities" not in data or qid not in data["entities"]:
+            logger.warning(f"[GET_ENTITY_INFO] Entity {qid} not found")
+            return {"error": "Entity not found"}
+        
+        entity = data["entities"][qid]
+        if "missing" in entity:
+            logger.warning(f"[GET_ENTITY_INFO] Entity {qid} is missing")
+            return {"error": "Entity is missing"}
+        
+        return {
+            "id": entity["id"],
+            "label": entity.get("labels", {}).get("en", {}).get("value", ""),
+            "description": entity.get("descriptions", {}).get("en", {}).get("value", ""),
+            "aliases": [a["value"] for a in entity.get("aliases", {}).get("en", [])],
+            "instance_of": [
+                claim["mainsnak"]["datavalue"]["value"]["id"]
+                for claim in entity.get("claims", {}).get("P31", [])
+                if "datavalue" in claim.get("mainsnak", {})
+            ]
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
-class OneNetLinker(AbstractEntityLinker):
-    """
-    OneNet-style entity linker following onenet_system.py approach
-    Uses transformers LLM instead of API
-    """
-    
+def erp(entity: Dict, database: EntityDatabase, is_parser: bool = False):
+    if is_parser:
+        def parse_erp_output(output: str) -> List[int]:
+            return [i.strip() for i in output.split('<<ANSWER>>')[-1].split('\n')[0].strip().split(',')]
+        return parse_erp_output
+    else:
+        context_left = entity['context_left']
+        mention = entity['text']
+        context_right = entity['context_right']
+        entity_ids = list(database.get_candidates(entity['text']))
+        entities = [{ 'id': ids, 'label': database.get_entity_name(ids)} for ids in entity_ids]
+        cands = '\n'.join([f"{i['id']}. {i['label']}" for i in entities[:20]])
+        return f'''## **Step 1: Entity Reduction Processor (ERP)**
+- **What it does:** This is the first stage. It takes the **input** (a mention like "fennec fox" and the surrounding text/context) and a long list of possible **candidate entities** that could match that mention.
+- **How it works:** It filters out candidates that are obviously wrong based on the context.  
+  *Example:* If the context says "living in desert regions of North Africa," it will remove candidates like *Arctic Fox* (lives in the cold) or fictional characters like *Nick Wilde*.  
+- **Result:** A shorter, more relevant list of candidate entities (e.g., Red Fox, Rippell’s Fox).
+
+### How to output the result?
+- You should output the id of entities that are relevant to the mention text given the context.
+- Each id must be separated by a comma.
+- Example: Q023454, Q320004, Q32454, Q1234
+
+### Example
+Context: The **fennec fox** is a small fox that lives in the desert regions of North Africa.
+Mention: fennec fox
+Candidates:
+Q32454. Arctic Fox: A fox that lives in the Arctic regions.
+Q1234. Red Fox:
+Q654767. Rippell's Fox: A fox that lives in the Rippell's regions.
+Q123456. Nick Wilde: A fox that lives in the Nick Wilde regions.
+Q023454. Fennec Fox: A fox that lives in the Fennec regions.
+Q320004. Desert Fox:
+Answer:
+I believe the relevant entities are Q023454, Q320004, Q1234. Artic Fox does not live in the desert regions of North Africa.
+<<ANSWER>>Q023454, Q320004, Q32454, Q1234
+
+### Input
+Context: {context_left} **{mention}** {context_right}
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+def del_prior_entity_linker(entity: Dict, candidates: List[Dict], database: EntityDatabase, is_parser: bool = False):
+    if is_parser:
+        def parse_del_prior_entity_linker_output(output: str) -> List[int]:
+            return output.split('<<ANSWER>>')[-1].split('\n')[0].strip()
+        return parse_del_prior_entity_linker_output
+    else:
+        mention = entity['text']
+        cands = '\n'.join([f"{i['id']}. {i['label']}\n- Description: {i['description']}\n- Aliases: {', '.join(i['aliases'])}" for i in candidates[:10]])
+        return f'''### **Step 2: Dual-perspective Entity Linker (DEL)**
+- **What it does:** This step takes the filtered candidates and tries to decide which one is the *correct* match using **two different perspectives**.
+
+Your perspective is:
+- **Prior Entity Linker:**  
+  - Asks: *"Based on common knowledge, which entity do people usually mean when they say the mention text?"*  
+  - Uses general world knowledge (like Wikipedia or common sense) to pick the most likely candidate.
+
+### How to output the result?
+- You should output the id of the entity that is the correct match.
+- Example: Q023454
+
+### Example
+Mention: fennec fox
+Candidates:
+Q1234. Red Fox:
+- Description: A fox that lives in the Red regions.
+- Aliases: Red Fox, Red Foxes
+Q654767. Rippell's Fox:
+- Description: A fox that lives in the Rippell's regions.
+- Aliases: Rippell's Fox, Rippell's Foxes
+Q023454. Fennec Fox:
+- Description: A fox that lives in the Fennec desert regions.
+- Aliases: Fennec Fox, Fennec Foxes
+Answer:
+I believe the relevant entity is Q023454.
+<<ANSWER>>Q023454
+
+### Input
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+def del_contextual_entity_linker(entity: Dict, candidates: List[Dict], database: EntityDatabase, is_parser: bool = False):
+    if is_parser:
+        def parse_del_contextual_entity_linker_output(output: str) -> List[int]:
+            return output.split('<<ANSWER>>')[-1].split('\n')[0].strip()
+        return parse_del_contextual_entity_linker_output
+    else:
+        context_left = entity['context_left']
+        mention = entity['text']
+        context_right = entity['context_right']
+        cands = '\n'.join([f"{i['id']}. {i['label']}\n- Description: {i['description']}\n- Aliases: {', '.join(i['aliases'])}" for i in candidates[:10]])
+        return f'''### **Step 2: Dual-perspective Entity Linker (DEL)**
+Context: The **fennec fox** is a small fox that lives in the desert regions of North Africa.
+Mention: fennec fox
+Candidates:
+Q1234. Red Fox:
+- Description: A fox that lives in the Red regions.
+- Aliases: Red Fox, Red Foxes
+Q654767. Rippell's Fox:
+- Description: A fox that lives in the Rippell's regions.
+- Aliases: Rippell's Fox, Rippell's Foxes
+Q023454. Fennec Fox:
+- Description: A fox that lives in the Fennec desert regions.
+- Aliases: Fennec Fox, Fennec Foxes
+Answer:
+I believe the relevant entity is Q023454.
+<<ANSWER>>Q023454
+
+### Input
+Context: {context_left} **{mention}** {context_right}
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+def ecj(entity: Dict, candidates: List[Dict], database: EntityDatabase, is_parser: bool = False):
+    if is_parser:
+        def parse_ecj_output(output: str) -> List[int]:
+            return output.split('<<ANSWER>>')[-1].split('\n')[0].strip()
+        return parse_ecj_output
+    else:
+        if candidates[0]['id'] == candidates[1]['id']:
+            return f'''Return <<ANSWER>>{candidates[0]['id']} in your answer without anything else. Just copy paste the input.
+## Example
+Input: <<ANSWER>>Q1234
+Output: <<ANSWER>>Q1234
+
+Input: <<ANSWER>>Q4452365
+Output: <<ANSWER>>Q4452365
+
+Input: <<ANSWER>>Q0345646
+Output: <<ANSWER>>Q0345646
+
+Input: <<ANSWER>>ERT8030452
+Output: <<ANSWER>>ERT8030452
+
+Input: <<ANSWER>>Q023454
+Output: <<ANSWER>>Q023454
+
+## Your input:
+Input: <<ANSWER>>{candidates[0]['id']}
+Output:
+'''
+        context_left = entity['context_left']
+        mention = entity['text']
+        context_right = entity['context_right']
+        cands = '\n'.join([f"{i['id']}. {i['label']}\n- Description: {i['description']}\n- Aliases: {', '.join(i['aliases'])}" for i in candidates[:20]])
+        return f'''### **Step 3: Entity Consensus Judger (ECJ)**
+- **What it does:** This is the final check to make sure the chosen entity is consistent and correct.
+- **How it works:**
+- Takes the top candidate(s) from the previous step.
+- Uses a **Large Language Model (LLM)** to double-check if the choice makes sense with the context.
+- The **Consistency Algorithm** ensures the explanation is logical.
+- If everything agrees, the **Merge Module** produces the final answer.
+
+- **Result:** The final answer is the entity that is the correct match.
+
+### How to output the result?
+- You should output the id of the entity that is the correct match.
+- Example: Q023454
+
+### Example
+Context: The **fennec fox** is a small fox that lives in the desert regions of North Africa.
+Mention: fennec fox
+Candidates:
+Q654767. Rippell's Fox:
+- Description: A fox that lives in the Rippell's regions.
+- Aliases: Rippell's Fox, Rippell's Foxes
+Q023454. Fennec Fox:
+- Description: A fox that lives in the Fennec desert regions.
+- Aliases: Fennec Fox, Fennec Foxes
+Answer:
+I believe the relevant entity is Q023454.
+<<ANSWER>>Q023454
+
+### Input
+Context: {context_left} **{mention}** {context_right}
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+class OneNetLinker(AbstractEntityLinker):    
     def __init__(self,
                  entity_database: EntityDatabase,
                  config: Dict[str, Any]):
-        self.entity_db = entity_database
-        
-        # Load spaCy model for NER
-        try:
-            self.model = spacy.load(LARGE_MODEL_NAME, disable=["lemmatizer"])
-            logger.info(f"Loaded spaCy model: {LARGE_MODEL_NAME}")
-        except Exception as e:
-            logger.error(f"Failed to load spaCy model: {e}")
-            self.model = None
-        
-        # Get config variables
-        self.linker_identifier = config.get("linker_name", "OneNet LLM")
-        self.ner_identifier = "spaCy NER"
-        
-        # LLM client (only for entity linking, not NER)
-        from elevant.llm_client import LLMClient
-        model_path = config.get("llm_model_path", None)
-        self.llm_client = LLMClient(model_path) if model_path else None
-        
-        # For Gemini API, check if model is available
-        if self.llm_client and self.llm_client.use_gemini:
-            if not self.llm_client.gemini_model:
-                logger.warning("Gemini model not initialized. LLM features will be disabled.")
-                self.llm_client = None
-            else:
-                logger.info(f"Gemini API initialized with model: {model_path}")
-        
-        # Ensure required entity databases are loaded
-        try:
-            self.entity_db.load_entity_names()
-            self.entity_db.load_alias_to_entities()
-            self.entity_db.load_hyperlink_to_most_popular_candidates()
-            self.entity_db.load_sitelink_counts()
-        except Exception as e:
-            logger.warning(f"Error while loading entity databases: {e}")
+        logger.info("[INIT] Initializing OneNetLinker")
+        self.entity_db = entity_database        
+        model_path = config.get("llm_model_path", "Orion-zhen/Qwen3-8B-AWQ")
+        use_4bit = config.get("use_4bit", True)
+        logger.info(f"[INIT] LLM model: {model_path}, use_4bit: {use_4bit}")
+        self.llm_client = LLMClient(model_path, use_4bit=use_4bit)
+        logger.info(f"[INIT] Loading spaCy model: {LARGE_MODEL_NAME}")
+        self.model = spacy.load(LARGE_MODEL_NAME, disable=["lemmatizer"])
+        logger.info("[INIT] Loading entity database...")
+        self.entity_db.load_entity_names()
+        self.entity_db.load_alias_to_entities()
+        self.entity_db.load_hyperlink_to_most_popular_candidates()
+        self.entity_db.load_sitelink_counts()
+        logger.info("[INIT] Entity database loaded")
 
-        # OneNet-specific parameters
         self.top_k = config.get("top_k", 5)
         self.shuffle_candidates = config.get("shuffle_candidates", True)
+        logger.info(f"[INIT] Configuration: top_k={self.top_k}, shuffle_candidates={self.shuffle_candidates}")
+        logger.info("[INIT] OneNetLinker initialized successfully")
         
     def has_entity(self, entity_id: str) -> bool:
         return self.entity_db.contains_entity(entity_id)
     
     def _detect_entities_with_spacy(self, text: str, doc: Optional[Doc] = None) -> List[Dict]:
-        """Use spaCy to detect entities"""
-        if doc is None:
-            if self.model is None:
-                logger.warning("spaCy model not loaded, cannot detect entities")
-                return []
-            doc = self.model(text)
-        
+        logger.info(f"[NER] Starting entity detection for text length: {len(text)}")
+        if doc is None: doc = self.model(text)
+        entity_spans = [{
+            'text': ent.text,
+            'start_pos': ent.start_char,
+            'end_pos': ent.end_char,
+        } for ent in doc.ents if ent.label_ not in NER_IGNORE_TAGS]
+
+        logger.info(f"[NER] Detected {len(entity_spans)} entity spans: {[e['text'] for e in entity_spans[:5]]}")
+
         entities = []
-        for ent in doc.ents:
-            # Skip ignored NER tags
-            if ent.label_ in NER_IGNORE_TAGS:
-                continue
-            
-            # Get aliases from entity database
-            mention_text = ent.text
-            aliases = [mention_text]  # Start with the mention itself
-            entity_candidates = self.entity_db.get_candidates(mention_text)
-            if entity_candidates:
-                # Add aliases from the database for top candidates
-                for entity_id in list(entity_candidates)[:3]:
-                    entity_aliases = self.entity_db.get_entity_aliases(entity_id)
-                    if entity_aliases:
-                        aliases.extend(entity_aliases[:2])  # Add a couple aliases per candidate
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_aliases = []
-            for alias in aliases:
-                if alias.lower() not in seen:
-                    seen.add(alias.lower())
-                    unique_aliases.append(alias)
-            aliases = unique_aliases[:5]  # Limit to 5 aliases
-            
+        for span_info in entity_spans:
             entities.append({
-                'text': mention_text,
-                'start_pos': ent.start_char,
-                'end_pos': ent.end_char,
-                'context_left': text[:ent.start_char],
-                'context_right': text[ent.end_char:],
-                'aliases': aliases,
+                'text': span_info['text'],
+                'start_pos': span_info['start_pos'],
+                'end_pos': span_info['end_pos'],
+                'context_left': text[:span_info['start_pos']],
+                'context_right': text[span_info['end_pos']:],
+                'aliases': [span_info['text']],
                 'link_entities': {},
-                'confidence': 0.0,
                 'candidates': []
             })
-        
+
+        logger.info(f"[NER] Built {len(entities)} entity dicts")
         return entities
     
-
-    def _parse_linked_entity(self, output: str) -> tuple:
-        """Parse entity ID and confidence from LLM output"""
-        entity_id = None
-        confidence = None
+    def _erp(self, entities: List[Dict]) -> List[List[Dict]]:
+        logger.info(f"[ERP] Starting ERP for {len(entities)} entities")
         
-        for line in output.split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            
-            if entity_id is None:
-                if line.upper().startswith('ENTITY ID:'):
-                    entity_id = line.split(':', 1)[1].strip()
-                elif line.upper().startswith('ENTITY ID'):
-                    parts = line.split(None, 2)
-                    if len(parts) >= 3:
-                        entity_id = parts[2].strip()
-                elif 'ENTITY' in line.upper() and 'ID' in line.upper():
-                    match = re.search(r'(?:ENTITY\s+ID[:\s]+|ID[:\s]+)([^\s]+)', line, re.IGNORECASE)
-                    if match:
-                        entity_id = match.group(1).strip()
-            
-            if confidence is None:
-                if line.upper().startswith('CONFIDENCE:'):
-                    try:
-                        confidence = float(line.split(':', 1)[1].strip())
-                    except (ValueError, IndexError):
-                        pass
-                elif line.upper().startswith('CONFIDENCE'):
-                    parts = line.split(None, 1)
-                    if len(parts) >= 2:
-                        try:
-                            confidence = float(parts[1].strip())
-                        except ValueError:
-                            pass
-                elif 'CONFIDENCE' in line.upper():
-                    match = re.search(r'(?:CONFIDENCE[:\s]+|CONF[:\s]+)([0-9.]+)', line, re.IGNORECASE)
-                    if match:
-                        try:
-                            confidence = float(match.group(1).strip())
-                        except ValueError:
-                            pass
-            
-            if entity_id is not None and confidence is not None:
-                break
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            prompt = erp(entity, self.entity_db, is_parser=False)
+            prompts.append(prompt)
         
-        if entity_id:
-            entity_id = entity_id.strip()
-            if entity_id.upper() in ['<NIL>', 'NIL', 'NONE', 'NULL', '']:
-                entity_id = None
+        # Call LLM
+        logger.info(f"[ERP] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[ERP] Received {len(llm_responses)} responses")
         
-        if confidence is not None:
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[ERP] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
+        
+        # Parse responses
+        parser = erp(None, None, is_parser=True)
+        parsed_qids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
             try:
-                confidence = float(confidence)
-                confidence = max(0.0, min(1.0, confidence))
-            except (ValueError, TypeError):
-                confidence = 0.0
-        else:
-            confidence = 0.0
+                qids = parser(response)
+                parsed_qids.append(qids)
+                logger.debug(f"[ERP] Entity '{entity['text']}': Parsed {len(qids)} QIDs: {qids[:5]}")
+            except Exception as e:
+                logger.warning(f"[ERP] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[ERP] Raw response: {response[:200]}")
+                parsed_qids.append([])
         
-        return entity_id, confidence
-
-    def _get_candidates_for_entities(self, entities: List[Dict]) -> List[Dict]:
-        """Get candidates and link entities"""
-        candidate_prompts = []
+        # Get entity info from Wikidata
+        logger.info(f"[ERP] Fetching entity info from Wikidata for {sum(len(qids) for qids in parsed_qids)} QIDs")
+        results = []
+        for idx, (entity, qids) in enumerate(zip(entities, parsed_qids)):
+            entity_infos = []
+            for qid in qids:
+                info = get_entity_info(qid)
+                if 'error' not in info:
+                    entity_infos.append(info)
+                else:
+                    logger.debug(f"[ERP] Entity '{entity['text']}': QID {qid} error: {info.get('error')}")
+            results.append(entity_infos)
+            logger.debug(f"[ERP] Entity '{entity['text']}': Got {len(entity_infos)} valid entity infos")
         
-        for ent_idx, entity in enumerate(entities):
-            entity_names = [entity['text']] + entity.get('aliases', [])
-            candidates = set.union(*[self.entity_db.get_candidates(name) for name in entity_names])
-            
-            candidate_dicts = []
-            if candidates:
-                for entity_id in list(candidates)[:self.top_k]:
-                    entity_name = self.entity_db.get_entity_name(entity_id)
-                    description = self.entity_db.get_entity_description(entity_id)
-                    if entity_name and entity_name != "Unknown":
-                        candidate_dicts.append({
-                            'id': entity_id,
-                            'title': entity_name,
-                            'description': description or f"Entity: {entity_name}",
-                        })
-            
-            # Sort by score
-            candidate_dicts.sort(key=lambda x: self.entity_db.get_sitelink_count(x['id']), reverse=True)
-            entities[ent_idx]['candidates'] = candidate_dicts
-            
-            if candidate_dicts and self.llm_client:
-                candidate_prompts.append(self._create_linking_prompt(entity, candidate_dicts))
-            else:
-                candidate_prompts.append(None)
-
-        if any(p is not None for p in candidate_prompts) and self.llm_client:
-            outputs = self.llm_client.call_batch([p for p in candidate_prompts if p is not None], max_tokens=512)
-            linked_results = [self._parse_linked_entity(o) for o in outputs]
-            
-            output_idx = 0
-            for i, prompt in enumerate(candidate_prompts):
-                if prompt is not None:
-                    entity_id, confidence = linked_results[output_idx]
-                    output_idx += 1
-                    if entity_id:
-                        entities[i]['link_entities'] = {'id': entity_id}
-                elif entities[i]['candidates']:
-                    # Fallback to first candidate
-                    entities[i]['link_entities'] = {'id': entities[i]['candidates'][0]['id']}
-
-        return entities
-
-    def _create_linking_prompt(self, entity: Dict, candidates: List[Dict]) -> List[Dict]:
-        """Create OneNet-style prompt for Wikipedia entity linking"""
-        context = f"{entity['context_left']} ###{entity['text']}### {entity['context_right']}"
-        context = ' '.join(context.split())
-        
-        # Shuffle candidates if enabled
-        if self.shuffle_candidates:
-            shuffled_candidates = random.sample(candidates, len(candidates))
-        else:
-            shuffled_candidates = candidates
-        
-        prompt = f"""KNOWLEDGE BASE: Wikipedia/Wikidata
-TASK: Link Entity Mention to Wikipedia
-
-=== ENTITY MENTION ===
-Mention: {entity['text']}
-Context: {context}
-
-=== CANDIDATE ENTITIES ===
-"""
-        
-        for i, candidate in enumerate(shuffled_candidates[:self.top_k]):
-            candidate_id = candidate.get('id', 'N/A')
-            candidate_title = candidate.get('title', 'Unknown')
-            candidate_desc = candidate.get('description', '')[:100] if candidate.get('description') else ''
-            prompt += f"{i+1}. {candidate_title} (ID: {candidate_id})"
-            if candidate_desc:
-                prompt += f"\n   Description: {candidate_desc}"
-            prompt += "\n"
-        
-        prompt += f"""
-=== YOUR TASK ===
-Select the entity that best matches the mention in context.
-
-CRITERIA:
-1. Name match: Does the name match?
-2. Context fit: Does it fit the context?
-3. Entity type: Is it the right type?
-
-=== REQUIRED OUTPUT FORMAT ===
-You MUST output in this EXACT format (both fields required):
-ENTITY ID: [candidate_id_from_list_above]
-CONFIDENCE: [confidence_score_between_0.0_and_1.0]
-
-Where:
-- ENTITY ID: The exact ID from the candidate list (e.g., "Q12345")
-- CONFIDENCE: A number between 0.0 and 1.0 indicating how confident you are:
-  * 0.9-1.0: Very high confidence (exact match, clear context)
-  * 0.7-0.9: High confidence (good match, some ambiguity)
-  * 0.5-0.7: Medium confidence (partial match, some uncertainty)
-  * 0.0-0.5: Low confidence (weak match, high uncertainty)
-
-=== CRITICAL: FORMAT EXAMPLE ===
-If candidate #2 is the best match and you're very confident:
-ENTITY ID: Q12345
-CONFIDENCE: 0.95
-
-If candidate #1 is a good match but you're moderately confident:
-ENTITY ID: Q67890
-CONFIDENCE: 0.75
-
-If no candidate matches well:
-ENTITY ID: <NIL>
-CONFIDENCE: 0.2
-
-=== STRICT REQUIREMENTS ===
-1. MUST output "ENTITY ID: " followed by the candidate ID or "<NIL>"
-2. MUST output "CONFIDENCE: " followed by a number between 0.0 and 1.0
-3. Both lines are REQUIRED
-4. Use exact candidate ID from the list above
-5. Confidence must be a valid float between 0.0 and 1.0
-6. NO additional text, NO explanations, ONLY these two lines
-
-=== OUTPUT NOW ===
-"""
-        
-        return [{"role": "user", "content": prompt}]
+        logger.info(f"[ERP] Completed: {[len(r) for r in results]} candidates per entity")
+        return results
     
+    def _del_prior_entity_linker(self, entities: List[Dict], candidates: List[List[Dict]]) -> str:
+        logger.info(f"[DEL-PRIOR] Starting Prior Entity Linker for {len(entities)} entities")
+        
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            cands = candidates[idx] if idx < len(candidates) else []
+            prompt = del_prior_entity_linker(entity, cands, self.entity_db, is_parser=False)
+            prompts.append(prompt)
+            logger.debug(f"[DEL-PRIOR] Entity {idx+1}/{len(entities)} '{entity['text']}': {len(cands)} candidates, prompt ({len(prompt)} chars)")
+            if idx == 0:  # Log first prompt as sample
+                logger.debug(f"[DEL-PRIOR] Sample prompt (first entity):\n{prompt[:500]}...")
+        
+        # Call LLM
+        logger.info(f"[DEL-PRIOR] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[DEL-PRIOR] Received {len(llm_responses)} responses")
+        
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[DEL-PRIOR] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
+        
+        # Parse responses
+        parser = del_prior_entity_linker(None, None, None, is_parser=True)
+        parsed_qids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
+            try:
+                qid = parser(response)
+                parsed_qids.append(qid)
+                logger.debug(f"[DEL-PRIOR] Entity '{entity['text']}': Parsed QID: {qid}")
+            except Exception as e:
+                logger.warning(f"[DEL-PRIOR] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[DEL-PRIOR] Raw response: {response[:200]}")
+                parsed_qids.append(None)
+        
+        # Get entity info from Wikidata
+        logger.info(f"[DEL-PRIOR] Fetching entity info from Wikidata for {len([q for q in parsed_qids if q])} QIDs")
+        results = []
+        for idx, (entity, qid) in enumerate(zip(entities, parsed_qids)):
+            if qid:
+                info = get_entity_info(qid)
+                if 'error' not in info:
+                    results.append(info)
+                    logger.debug(f"[DEL-PRIOR] Entity '{entity['text']}': Got entity info for {qid}: {info.get('label', 'N/A')}")
+                else:
+                    logger.warning(f"[DEL-PRIOR] Entity '{entity['text']}': QID {qid} error: {info.get('error')}")
+                    results.append({'id': qid, 'label': 'Unknown', 'description': '', 'aliases': []})
+            else:
+                logger.warning(f"[DEL-PRIOR] Entity '{entity['text']}': No QID parsed")
+                results.append({'id': None, 'label': 'Unknown', 'description': '', 'aliases': []})
+        
+        logger.info(f"[DEL-PRIOR] Completed: {len([r for r in results if r.get('id')])} entities linked")
+        return results
+
+    def _del_contextual_entity_linker(self, entities: List[Dict], candidates: List[List[Dict]]) -> str:
+        logger.info(f"[DEL-CONTEXT] Starting Contextual Entity Linker for {len(entities)} entities")
+        
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            cands = candidates[idx] if idx < len(candidates) else []
+            prompt = del_contextual_entity_linker(entity, cands, self.entity_db, is_parser=False)
+            prompts.append(prompt)
+            logger.debug(f"[DEL-CONTEXT] Entity {idx+1}/{len(entities)} '{entity['text']}': {len(cands)} candidates, prompt ({len(prompt)} chars)")
+            if idx == 0:  # Log first prompt as sample
+                logger.debug(f"[DEL-CONTEXT] Sample prompt (first entity):\n{prompt[:500]}...")
+        
+        # Call LLM
+        logger.info(f"[DEL-CONTEXT] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[DEL-CONTEXT] Received {len(llm_responses)} responses")
+        
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[DEL-CONTEXT] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
+        
+        # Parse responses
+        parser = del_contextual_entity_linker(None, None, None, is_parser=True)
+        parsed_qids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
+            try:
+                qid = parser(response)
+                parsed_qids.append(qid)
+                logger.debug(f"[DEL-CONTEXT] Entity '{entity['text']}': Parsed QID: {qid}")
+            except Exception as e:
+                logger.warning(f"[DEL-CONTEXT] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[DEL-CONTEXT] Raw response: {response[:200]}")
+                parsed_qids.append(None)
+        
+        # Get entity info from Wikidata
+        logger.info(f"[DEL-CONTEXT] Fetching entity info from Wikidata for {len([q for q in parsed_qids if q])} QIDs")
+        results = []
+        for idx, (entity, qid) in enumerate(zip(entities, parsed_qids)):
+            if qid:
+                info = get_entity_info(qid)
+                if 'error' not in info:
+                    results.append(info)
+                    logger.debug(f"[DEL-CONTEXT] Entity '{entity['text']}': Got entity info for {qid}: {info.get('label', 'N/A')}")
+                else:
+                    logger.warning(f"[DEL-CONTEXT] Entity '{entity['text']}': QID {qid} error: {info.get('error')}")
+                    results.append({'id': qid, 'label': 'Unknown', 'description': '', 'aliases': []})
+            else:
+                logger.warning(f"[DEL-CONTEXT] Entity '{entity['text']}': No QID parsed")
+                results.append({'id': None, 'label': 'Unknown', 'description': '', 'aliases': []})
+        
+        logger.info(f"[DEL-CONTEXT] Completed: {len([r for r in results if r.get('id')])} entities linked")
+        return results
+    
+    def _ecj(self, entities: List[Dict], candidates: List[List[Dict]]) -> str:
+        logger.info(f"[ECJ] Starting Entity Consensus Judger for {len(entities)} entities")
+        
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            cands = candidates[idx] if idx < len(candidates) else []
+            prompt = ecj(entity, cands, self.entity_db, is_parser=False)
+            prompts.append(prompt)
+            logger.debug(f"[ECJ] Entity {idx+1}/{len(entities)} '{entity['text']}': {len(cands)} candidates, prompt ({len(prompt)} chars)")
+            if idx == 0:  # Log first prompt as sample
+                logger.debug(f"[ECJ] Sample prompt (first entity):\n{prompt[:500]}...")
+        
+        # Call LLM
+        logger.info(f"[ECJ] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[ECJ] Received {len(llm_responses)} responses")
+        
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[ECJ] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
+        
+        # Parse responses
+        parser = ecj(None, None, None, is_parser=True)
+        parsed_qids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
+            try:
+                qid = parser(response)
+                parsed_qids.append(qid)
+                logger.debug(f"[ECJ] Entity '{entity['text']}': Parsed QID: {qid}")
+            except Exception as e:
+                logger.warning(f"[ECJ] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[ECJ] Raw response: {response[:200]}")
+                parsed_qids.append(None)
+        
+        # Get entity info from Wikidata
+        logger.info(f"[ECJ] Fetching entity info from Wikidata for {len([q for q in parsed_qids if q])} QIDs")
+        results = []
+        for idx, (entity, qid) in enumerate(zip(entities, parsed_qids)):
+            if qid:
+                info = get_entity_info(qid)
+                if 'error' not in info:
+                    results.append(info)
+                    logger.debug(f"[ECJ] Entity '{entity['text']}': Got entity info for {qid}: {info.get('label', 'N/A')}")
+                else:
+                    logger.warning(f"[ECJ] Entity '{entity['text']}': QID {qid} error: {info.get('error')}")
+                    results.append({'id': qid, 'label': 'Unknown', 'description': '', 'aliases': []})
+            else:
+                logger.warning(f"[ECJ] Entity '{entity['text']}': No QID parsed")
+                results.append({'id': None, 'label': 'Unknown', 'description': '', 'aliases': []})
+        
+        logger.info(f"[ECJ] Completed: {len([r for r in results if r.get('id')])} entities linked")
+        return results
+
     def predict(self,
                 text: str,
                 doc: Optional[Doc] = None,
                 uppercase: Optional[bool] = False) -> Dict[Tuple[int, int], EntityPrediction]:
-        """Predict entities using spaCy for NER and LLM for linking"""
+        logger.info(f"[PREDICT] Starting prediction for text length: {len(text)}")
         predictions = {}
-        
-        # Use spaCy for entity detection
-        detected_entities = self._detect_entities_with_spacy(text, doc)
-        
-        if not detected_entities:
-            return predictions
-        
-        # Use LLM for entity linking (batch processing)
-        detected_entities = self._get_candidates_for_entities(detected_entities)
-        
-        for entity in detected_entities:
-            span = (entity['start_pos'], entity['end_pos'])
-            entity_id = entity.get('link_entities', {}).get('id') or UnknownEntity.NIL.value
-            candidates = {c['id'] for c in entity.get('candidates', [])}
-            predictions[span] = EntityPrediction(span, entity_id, candidates)
 
+        # Step 1: Entity Detection
+        logger.info("[PREDICT] === Step 1: Entity Detection ===")
+        detected_entities = self._detect_entities_with_spacy(text, doc)
+        logger.info(f"[PREDICT] Detected {len(detected_entities)} entities: {[e['text'] for e in detected_entities]}")
+
+        if not detected_entities:
+            logger.info("[PREDICT] No entities detected, returning empty predictions")
+            return predictions
+
+        # Step 2: ERP - Entity Reduction Processor
+        logger.info("[PREDICT] === Step 2: ERP (Entity Reduction Processor) ===")
+        erp_results = self._erp(detected_entities)
+        logger.info(f"[PREDICT] ERP results: {[len(r) for r in erp_results]} candidates per entity")
+        for idx, (entity, cands) in enumerate(zip(detected_entities, erp_results)):
+            logger.debug(f"[PREDICT] Entity '{entity['text']}': {len(cands)} candidates after ERP: {[c.get('label', c.get('id', 'N/A')) for c in cands[:3]]}")
+
+        # Step 3: DEL - Dual-perspective Entity Linker
+        logger.info("[PREDICT] === Step 3: DEL (Dual-perspective Entity Linker) ===")
+        logger.info("[PREDICT] --- 3a: Prior Entity Linker ---")
+        del_prior_entity_linker_results = self._del_prior_entity_linker(detected_entities, erp_results)
+        logger.info("[PREDICT] --- 3b: Contextual Entity Linker ---")
+        del_contextual_entity_linker_results = self._del_contextual_entity_linker(detected_entities, erp_results)
+        
+        # Combine prior and contextual results
+        candidates = [[i, j] for i, j in zip(del_prior_entity_linker_results, del_contextual_entity_linker_results)]
+        logger.info(f"[PREDICT] DEL results combined: {len(candidates)} entity pairs")
+        for idx, (entity, prior, context) in enumerate(zip(detected_entities, del_prior_entity_linker_results, del_contextual_entity_linker_results)):
+            prior_id = prior.get('id') if prior else None
+            context_id = context.get('id') if context else None
+            logger.debug(f"[PREDICT] Entity '{entity['text']}': Prior={prior_id}, Context={context_id}")
+
+        # Step 4: ECJ - Entity Consensus Judger
+        logger.info("[PREDICT] === Step 4: ECJ (Entity Consensus Judger) ===")
+        linked_entities = self._ecj(detected_entities, candidates)
+        logger.info(f"[PREDICT] ECJ results: {len(linked_entities)} final entities")
+
+        # Build predictions
+        logger.info("[PREDICT] === Building final predictions ===")
+        for entity, linked_entity, cands in zip(detected_entities, linked_entities, erp_results):
+            span = (entity['start_pos'], entity['end_pos'])
+            entity_id = linked_entity.get('id') if linked_entity else None
+            if entity_id:
+                candidate_set = {c.get('id') for c in cands if c.get('id')}
+                
+                logger.debug(f"[PREDICT] Entity '{entity['text']}' ({span}): Linked to {entity_id} ({linked_entity.get('label', 'N/A')}), {len(candidate_set)} candidates")
+                
+                predictions[span] = EntityPrediction(span, entity_id, candidate_set)
+
+        logger.info(f"[PREDICT] Completed: {len(predictions)} predictions made")
         return predictions

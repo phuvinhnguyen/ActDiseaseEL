@@ -1,10 +1,7 @@
 {
   "linker_name": "General Graph LLM",
-  "llm_model_path": "Qwen/Qwen3-8B",
-  "n_descriptions": 3,
-  "k_search": 15,
-  "t_max": 10,
-  "high_confidence_threshold": 0.6,
-  "experiment_description": "Optimized graph-based entity linking with batch processing. For Wikipedia/Wikidata entities. Improved candidate retrieval and ranking."
+  "llm_model_path": "Orion-zhen/Qwen3-8B-AWQ",
+  "high_confidence_threshold": 0.7,
+  "cbi_iterations": 4
 }
 
