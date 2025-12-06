@@ -246,7 +246,7 @@ def cbii(entity: Dict, candidates: List[Dict], high_conf_entities: List[Dict], d
         context_left = entity['context_left']
         mention = entity['text']
         context_right = entity['context_right']
-        cands = [f"{i['id']}. {i['label']}\n- Description: {i['description']}\n- Aliases: {', '.join(i['aliases'])}" for i in candidates]
+        cands = [f"{i['id']}. {i['label']}\n- Description: {i['description']}\n- Aliases: {', '.join(i['aliases'])}" for i in candidates if 'id' in i]
         random.shuffle(cands)
         cands = '\n\n'.join(cands).strip() or "No candidates"
         high_conf_description = [f"{i['id']}. {i['label']}\n- Description: {i['description']}\n- Aliases: {', '.join(i['aliases'])}" for i in high_conf_entities]
