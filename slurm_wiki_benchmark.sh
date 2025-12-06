@@ -1,8 +1,9 @@
 #!/bin/bash
 mkdir -p logs
 
-LLM_METHODS=("general-graph-llm" "general-onenet-llm")
-BENCHMARKS=("aida-conll-test" "derczynski" "kore50" "msnbc" "msnbc-updated" "news-fair-no-coref" "news-fair-v2-no-coref")
+LLM_METHODS=("general-graph-llm")
+BENCHMARKS=("aida-conll-test")
+# "aida-conll-test" "kore50" "msnbc""msnbc-updated" "derczynski" "news-fair-no-coref" "news-fair-v2-no-coref"
 
 for m in "${LLM_METHODS[@]}"; do mkdir -p "evaluation-results/$m"; done
 

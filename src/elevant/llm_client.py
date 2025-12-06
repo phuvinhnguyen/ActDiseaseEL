@@ -134,7 +134,7 @@ class LLMClient:
     def call_batch(
         self,
         prompts: List[str],
-        max_new_tokens: int = 1024,
+        max_new_tokens: int = 4096,
         temperature: float = 0.1,
         **sampling_kwargs
     ) -> List[str]:

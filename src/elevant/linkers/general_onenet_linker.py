@@ -124,7 +124,7 @@ def erp(entity: Dict, database: EntityDatabase, is_parser: bool = False):
         context_right = entity['context_right']
         entity_ids = list(database.get_candidates(entity['text']))
         entities = [{ 'id': ids, 'label': database.get_entity_name(ids)} for ids in entity_ids]
-        cands = '\n'.join([f"{i['id']}. {i['label']}" for i in entities[:20]])
+        cands = '\n'.join([f"{i['id']}. {i['label']}" for i in entities[:60]])
         return f'''## **Step 1: Entity Reduction Processor (ERP)**
 - **What it does:** This is the first stage. It takes the **input** (a mention like "fennec fox" and the surrounding text/context) and a long list of possible **candidate entities** that could match that mention.
 - **How it works:** It filters out candidates that are obviously wrong based on the context.  

@@ -17,3 +17,5 @@ elevant_data_wiki
 *.zip
 *.ipynb
 *evaluation_*
+*.sqlite3
+temp_*

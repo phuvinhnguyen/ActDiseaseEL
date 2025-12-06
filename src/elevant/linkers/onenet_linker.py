@@ -1,19 +1,56 @@
 """
-OneNet-style entity linker using transformers LLM
-Simplified version with batch processing for faster inference.
+### **Step 1: Entity Reduction Processor (ERP)**
+- **What it does:** This is the first stage. It takes the **input** (a mention like "myocardial infarction" and the surrounding text/context) and a long list of possible **candidate diseases** that could match that mention.
+- **How it works:** It filters out candidates that are obviously wrong based on the context.  
+  *Example:* If the context says "chest pain and elevated cardiac enzymes," it will remove candidates like *Arthritis* (not cardiac-related) or *Dermatitis* (skin condition).  
+- **Result:** A shorter, more relevant list of candidate diseases (e.g., Myocardial Infarction, Acute Coronary Syndrome).
 
-This implementation keeps the original OneNet idea:
-- Use an LLM to detect mentions in text
-- Generate candidates for each mention
-- Optionally use the LLM again to pick the best candidate
+---
 
-But instead of getting candidates from `EntityDatabase`, it now follows
-the graph-based linker approach and derives candidates directly from
-the DOID ontology via `find_near_matches_for_span`.
+### **Step 2: Dual-perspective Entity Linker (DEL)**
+- **What it does:** This step takes the filtered candidates and tries to decide which one is the *correct* match using **two different perspectives**.
+
+  1. **Prior Entity Linker:**  
+     - Asks: *"Based on common medical knowledge, which disease do people usually mean when they say 'myocardial infarction'?"*  
+     - Uses general medical knowledge to pick the most likely candidate.
+
+  2. **Contextual Entity Linker:**  
+     - Asks: *"Given the specific context provided, which disease fits best here?"*  
+     - Carefully reads the surrounding text to make a decision.
+
+- **How it works:** The system runs both linkers, compares their answers, and decides on the best candidate.
+
+---
+
+### **Step 3: Entity Consensus Judger (ECJ)**
+- **What it does:** This is the final check to make sure the chosen disease is consistent and correct.
+- **How it works:**
+  - Takes the top candidate(s) from the previous step.
+  - Uses a **Large Language Model (LLM)** to double-check if the choice makes sense with the context.
+  - The **Consistency Algorithm** ensures the explanation is logical.
+  - If everything agrees, the **Merge Module** produces the final answer.
+
+  *Example:*  
+  The LLM might explain: *"Myocardial Infarction is correct because it presents with chest pain and elevated cardiac enzymes, which matches the context."*
+
+---
+
+### **Final Output:**
+- The system outputs the **correctly linked disease** (e.g., *Myocardial Infarction*) with a clear explanation.
+
+---
+
+### **In Simple Summary:**
+1. **ERP** → Reduces a big list to a few possible options.  
+2. **DEL** → Looks at the problem from two angles (common knowledge + specific context) to pick one.  
+3. **ECJ** → Double-checks the choice using an LLM to ensure it's correct and consistent.  
+
+This helps computers understand *which real-world disease* a word refers to, especially when words can mean different things in different situations.
 """
 import logging
 import re
 import random
+import spacy
 from typing import Dict, Tuple, Optional, Any, List
 
 from spacy.tokens import Doc
@@ -22,394 +59,573 @@ from elevant.linkers.abstract_entity_linker import AbstractEntityLinker
 from elevant.models.entity_prediction import EntityPrediction
 from elevant.models.entity_database import EntityDatabase
 from elevant.utils.knowledge_base_mapper import UnknownEntity
+from elevant.settings import LARGE_MODEL_NAME, NER_IGNORE_TAGS
+from elevant.llm_client import LLMClient
 
-# Re‑use ontology utilities from the graph-based linker
-from elevant.linkers.graph_linker import parse_obo_file, find_near_matches_for_span
+# Import OBOEntityLinker from graph_linker
+from elevant.linkers.graph_linker import OBOEntityLinker
 
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
+def erp(entity: Dict, obo_linker: OBOEntityLinker, is_parser: bool = False):
+    """Entity Reduction Processor - filters candidates based on context"""
+    if is_parser:
+        def parse_erp_output(output: str) -> List[str]:
+            result = output.split('<<ANSWER>>')[-1].split('\n')[0].strip()
+            if not result:
+                return []
+            return [i.strip() for i in result.split(',') if i.strip()]
+        return parse_erp_output
+    else:
+        context_left = entity['context_left']
+        mention = entity['text']
+        context_right = entity['context_right']
+        
+        # Get candidates from OBO linker
+        link_results = obo_linker.link(mention, k=60)
+        entity_ids = []
+        for span_data in link_results.values():
+            entity_ids.extend([e['id'] for e in span_data['entities']])
+        
+        # Remove duplicates and limit
+        entity_ids = list(set(entity_ids))[:60]
+        entities = [obo_linker.id(eid) for eid in entity_ids if 'id' in obo_linker.id(eid)]
+        entities = [e for e in entities if 'id' in e]
+        
+        cands = '\n'.join([f"{i['id']}. {i['label']}" for i in entities[:60]])
+        return f'''## **Step 1: Entity Reduction Processor (ERP)**
+- **What it does:** This is the first stage. It takes the **input** (a disease mention like "myocardial infarction" and the surrounding text/context) and a long list of possible **candidate diseases** that could match that mention.
+- **How it works:** It filters out candidates that are obviously wrong based on the medical context.  
+  *Example:* If the context says "chest pain and elevated cardiac enzymes," it will remove candidates like *Arthritis* (not cardiac-related) or *Dermatitis* (skin condition).  
+- **Result:** A shorter, more relevant list of candidate diseases (e.g., Myocardial Infarction, Acute Coronary Syndrome).
 
-class OneNetLinker(AbstractEntityLinker):
-    """
-    OneNet-style entity linker following onenet_system.py approach
-    Uses transformers LLM instead of API.
+### How to output the result?
+- You should output the id of diseases that are relevant to the mention text given the medical context.
+- Each id must be separated by a comma.
+- Example: DOID:12345, DOID:67890, DOID:11111
+- Follow the format with prefix <<ANSWER>> followed by the ids (Example: <<ANSWER>>DOID:12345, DOID:67890, DOID:11111)
+- You must output at most 10 ids, which are the most relevant to the mention.
 
-    Entity candidates are discovered using the DOID ontology and
-    `find_near_matches_for_span` (same mechanism as `GraphLinker`),
-    not via `EntityDatabase.get_candidates`.
-    """
-    
+### Example
+Context: The patient presents with **chest pain** and elevated cardiac enzymes, suggesting acute cardiac event.
+Mention: chest pain
+Candidates:
+DOID:11111. Arthritis: Inflammation of joints.
+DOID:22222. Dermatitis: Inflammation of skin.
+DOID:12345. Myocardial Infarction: Heart attack caused by blockage of coronary arteries.
+DOID:33333. Acute Coronary Syndrome: A spectrum of conditions including MI and unstable angina.
+DOID:67890. Angina Pectoris: Chest pain due to reduced blood flow to heart.
+Answer:
+Given the context mentioning elevated cardiac enzymes and acute cardiac event, both Myocardial Infarction and Acute Coronary Syndrome are highly relevant, not just Myocardial Infarction alone. Angina is also possible but less likely given the enzyme elevation.
+<<ANSWER>>DOID:12345, DOID:33333, DOID:67890
+
+### Input
+Context: {context_left} **{mention}** {context_right}
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+def del_prior_entity_linker(entity: Dict, candidates: List[Dict], obo_linker: OBOEntityLinker, is_parser: bool = False):
+    """Prior Entity Linker - uses common medical knowledge"""
+    if is_parser:
+        def parse_del_prior_entity_linker_output(output: str) -> str:
+            result = output.split('<<ANSWER>>')[-1].split('\n')[0].strip()
+            return result if result else None
+        return parse_del_prior_entity_linker_output
+    else:
+        mention = entity['text']
+        cands = '\n'.join([f"{i['id']}. {i['label']}\n- Description: {i.get('description', '')[:100]}...\n- Aliases: {', '.join(i.get('aliases', [])[:5])}" for i in candidates[:10]])
+        return f'''### **Step 2: Dual-perspective Entity Linker (DEL)**
+- **What it does:** This step takes the filtered candidates and tries to decide which one is the *correct* match using **two different perspectives**.
+
+Your perspective is:
+- **Prior Entity Linker:**  
+  - Asks: *"Based on common medical knowledge, which disease do people usually mean when they say the mention text?"*  
+  - Uses general medical knowledge (like medical textbooks or common sense) to pick the most likely candidate.
+
+### How to output the result?
+- You should output the id of the disease that is the correct match.
+- Example: DOID:12345
+- Follow the format with prefix <<ANSWER>> followed by the id (Example: <<ANSWER>>DOID:12345)
+
+### Example
+Mention: myocardial infarction
+Candidates:
+DOID:67890. Angina Pectoris:
+- Description: Chest pain due to reduced blood flow to heart.
+- Aliases: Angina, Angina Pectoris
+DOID:12345. Myocardial Infarction:
+- Description: Heart attack caused by blockage of coronary arteries, often presenting with chest pain and elevated cardiac enzymes.
+- Aliases: Myocardial Infarction, Heart Attack, MI
+DOID:33333. Acute Coronary Syndrome:
+- Description: A spectrum of conditions including myocardial infarction and unstable angina.
+- Aliases: Acute Coronary Syndrome, ACS
+Answer:
+I believe the relevant disease is DOID:12345 (Myocardial Infarction), as it is the most common interpretation of "myocardial infarction".
+<<ANSWER>>DOID:12345
+
+### Input
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+def del_contextual_entity_linker(entity: Dict, candidates: List[Dict], obo_linker: OBOEntityLinker, is_parser: bool = False):
+    """Contextual Entity Linker - uses specific context"""
+    if is_parser:
+        def parse_del_contextual_entity_linker_output(output: str) -> str:
+            result = output.split('<<ANSWER>>')[-1].split('\n')[0].strip()
+            return result if result else None
+        return parse_del_contextual_entity_linker_output
+    else:
+        context_left = entity['context_left']
+        mention = entity['text']
+        context_right = entity['context_right']
+        cands = '\n'.join([f"{i['id']}. {i['label']}\n- Description: {i.get('description', '')[:100]}...\n- Aliases: {', '.join(i.get('aliases', [])[:5])}" for i in candidates[:10]])
+        return f'''### **Step 2: Dual-perspective Entity Linker (DEL)**
+- **What it does:** This step takes the filtered candidates and tries to decide which one is the *correct* match using **two different perspectives**.
+
+Your perspective is:
+- **Contextual Entity Linker:**  
+  - Asks: *"Given the specific medical context provided, which disease fits best here?"*  
+  - Carefully reads the surrounding text to make a decision.
+
+### How to output the result?
+- You should output the id of the disease that is the correct match based on the context.
+- Example: DOID:12345
+- Follow the format with prefix <<ANSWER>> followed by the id (Example: <<ANSWER>>DOID:12345)
+
+### Example
+Context: The patient presents with **chest pain** and elevated cardiac enzymes, suggesting acute cardiac event.
+Mention: chest pain
+Candidates:
+DOID:67890. Angina Pectoris:
+- Description: Chest pain due to reduced blood flow to heart.
+- Aliases: Angina, Angina Pectoris
+DOID:12345. Myocardial Infarction:
+- Description: Heart attack caused by blockage of coronary arteries, often presenting with chest pain and elevated cardiac enzymes.
+- Aliases: Myocardial Infarction, Heart Attack, MI
+DOID:33333. Acute Coronary Syndrome:
+- Description: A spectrum of conditions including myocardial infarction and unstable angina.
+- Aliases: Acute Coronary Syndrome, ACS
+Answer:
+Given the context mentioning elevated cardiac enzymes and acute cardiac event, Myocardial Infarction is the most relevant match.
+<<ANSWER>>DOID:12345
+
+### Input
+Context: {context_left} **{mention}** {context_right}
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+def ecj(entity: Dict, candidates: List[Dict], obo_linker: OBOEntityLinker, is_parser: bool = False):
+    """Entity Consensus Judger - final check"""
+    if is_parser:
+        def parse_ecj_output(output: str) -> str:
+            result = output.split('<<ANSWER>>')[-1].split('\n')[0].strip()
+            return result if result else None
+        return parse_ecj_output
+    else:
+        # Filter out None/empty candidates
+        valid_candidates = [c for c in candidates if c and c.get('id')]
+        
+        # If both candidates are the same (prior and contextual agree), return early
+        if len(valid_candidates) >= 2 and valid_candidates[0].get('id') == valid_candidates[1].get('id'):
+            return f'''Return <<ANSWER>>{valid_candidates[0]['id']} in your answer without anything else. Just copy paste the input.
+## Example
+Input: <<ANSWER>>DOID:12345
+Output: <<ANSWER>>DOID:12345
+
+Input: <<ANSWER>>DOID:4452365
+Output: <<ANSWER>>DOID:4452365
+
+Input: <<ANSWER>>DOID:0345646
+Output: <<ANSWER>>DOID:0345646
+
+## Your input:
+Input: <<ANSWER>>{valid_candidates[0]['id']}
+Output:
+'''
+        context_left = entity['context_left']
+        mention = entity['text']
+        context_right = entity['context_right']
+        cands = '\n'.join([f"{i['id']}. {i['label']}\n- Description: {i.get('description', '')[:100]}...\n- Aliases: {', '.join(i.get('aliases', [])[:5])}" for i in valid_candidates[:20]])
+        return f'''### **Step 3: Entity Consensus Judger (ECJ)**
+- **What it does:** This is the final check to make sure the chosen disease is consistent and correct.
+- **How it works:**
+- Takes the top candidate(s) from the previous step.
+- Uses a **Large Language Model (LLM)** to double-check if the choice makes sense with the context.
+- The **Consistency Algorithm** ensures the explanation is logical.
+- If everything agrees, the **Merge Module** produces the final answer.
+
+- **Result:** The final answer is the disease that is the correct match.
+
+### How to output the result?
+- You should output the id of the disease that is the correct match.
+- Example: DOID:12345
+- Follow the format with prefix <<ANSWER>> followed by the id (Example: <<ANSWER>>DOID:12345)
+
+### Example
+Context: The patient presents with **chest pain** and elevated cardiac enzymes, suggesting acute cardiac event.
+Mention: chest pain
+Candidates:
+DOID:67890. Angina Pectoris:
+- Description: Chest pain due to reduced blood flow to heart.
+- Aliases: Angina, Angina Pectoris
+DOID:12345. Myocardial Infarction:
+- Description: Heart attack caused by blockage of coronary arteries, often presenting with chest pain and elevated cardiac enzymes.
+- Aliases: Myocardial Infarction, Heart Attack, MI
+Answer:
+Given the context mentioning elevated cardiac enzymes and acute cardiac event, Myocardial Infarction is the most relevant match.
+<<ANSWER>>DOID:12345
+
+### Input
+Context: {context_left} **{mention}** {context_right}
+Mention: {mention}
+Candidates:
+{cands}
+# '''
+
+class OneNetLinker(AbstractEntityLinker):    
     def __init__(self,
                  entity_database: EntityDatabase,
                  config: Dict[str, Any],
                  obo_path: str = '/media/volume/LLMRag2/.local/HumanDiseaseOntology/src/ontology/doid-merged.obo'):
-        self.entity_db = entity_database
-        self.model = None
-        self.obo_path = obo_path
+        logger.info("[INIT] Initializing OneNetLinker with DOID ontology")
+        self.entity_db = entity_database  # Keep for compatibility
         
-        # Get config variables
-        self.linker_identifier = config.get("linker_name", "OneNet LLM")
-        self.ner_identifier = self.linker_identifier
+        # Initialize OBO linker for DOID
+        logger.info(f"[INIT] Loading DOID ontology from {obo_path}")
+        self.obo_linker = OBOEntityLinker(obo_path)
         
         # LLM client
-        from elevant.llm_client import LLMClient
-        model_path = config.get("llm_model_path", None)
-        self.llm_client = LLMClient(model_path) if model_path else None
+        model_path = config.get("llm_model_path", "Orion-zhen/Qwen3-8B-AWQ")
+        use_4bit = config.get("use_4bit", True)
+        logger.info(f"[INIT] LLM model: {model_path}, use_4bit: {use_4bit}")
+        self.llm_client = LLMClient(model_path, use_4bit=use_4bit)
         
-        # For Gemini API, check if model is available
-        if self.llm_client and getattr(self.llm_client, "use_gemini", False):
-            if not getattr(self.llm_client, "gemini_model", None):
-                logger.warning("Gemini model not initialized. LLM features will be disabled.")
-                self.llm_client = None
-            else:
-                logger.info(f"Gemini API initialized with model: {model_path}")
+        # spaCy model for NER
+        logger.info(f"[INIT] Loading spaCy model: {LARGE_MODEL_NAME}")
+        self.model = spacy.load(LARGE_MODEL_NAME, disable=["lemmatizer"])
         
-        # Load ontology matcher from OBO file (same as GraphLinker)
-        try:
-            self.entities_matcher = parse_obo_file(self.obo_path)
-        except Exception as e:
-            logger.warning(f"Error while parsing OBO ontology at {self.obo_path}: {e}")
-            self.entities_matcher = None
-        
-        # OneNet-specific parameters
         self.top_k = config.get("top_k", 5)
         self.shuffle_candidates = config.get("shuffle_candidates", True)
+        logger.info(f"[INIT] Configuration: top_k={self.top_k}, shuffle_candidates={self.shuffle_candidates}")
+        logger.info("[INIT] OneNetLinker initialized successfully")
         
     def has_entity(self, entity_id: str) -> bool:
-        # Keep compatibility with existing `EntityDatabase` checks
-        return self.entity_db.contains_entity(entity_id)
+        """Check if entity exists in DOID ontology"""
+        return 'id' in self.obo_linker.id(entity_id)
     
-    def _detect_entities_with_llm(self, text: str) -> List[Dict]:
-        """Use LLM to detect medical entities"""
-        prompt = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
-TASK: Extract Medical Disease Entities
+    def _detect_entities_with_spacy(self, text: str, doc: Optional[Doc] = None) -> List[Dict]:
+        """Detect entities using spaCy NER"""
+        logger.info(f"[NER] Starting entity detection for text length: {len(text)}")
+        if doc is None: 
+            doc = self.model(text)
+        entity_spans = [{
+            'text': ent.text,
+            'start_pos': ent.start_char,
+            'end_pos': ent.end_char,
+        } for ent in doc.ents if ent.label_ not in NER_IGNORE_TAGS]
 
-=== ABOUT DOID ===
-DOID contains diseases, syndromes, infections, genetic disorders, cancers, and medical conditions.
-DOID does NOT contain: people, places, organizations, dates, numbers, anatomical parts alone.
+        logger.info(f"[NER] Detected {len(entity_spans)} entity spans: {[e['text'] for e in entity_spans[:5]]}")
 
-=== TEXT ===
-{text}
-
-=== YOUR TASK ===
-Extract ALL disease/medical condition mentions that can be linked to DOID.
-
-=== REQUIRED OUTPUT FORMAT ===
-You MUST output each entity in this EXACT format (all fields required):
-ENTITY: mention text | short surrounding text | alias 1, alias 2, alias 3
-
-Where:
-- mention text: The exact text as it appears in the document
-- short surrounding text: An exact match short surrounding text that contains the mention text
-- alias1,alias2,alias3: Comma-separated list of alternative names/synonyms (at least include the mention text itself)
-
-=== CRITICAL: FORMAT EXAMPLE ===
-If the text contains: "Patient diagnosed with agranulocytosis and leucopenia."
-Then output:
-ENTITY: agranulocytosis | In many cases, agranulocytosis is caused by chemotherapy. | agranulocytosis,agranulocytic angina
-
-If "leucopenia" is mentioned:
-Then output:
-ENTITY: leucopenia | Leucopenia is a condition that occurs when the number of white blood cells in the body is too low. | leucopenia,leukopenia
-
-=== STRICT REQUIREMENTS ===
-1. EVERY line must start with "ENTITY: "
-2. ALL fields are REQUIRED (mention | short surrounding text | aliases)
-3. Use EXACT text from document (case-sensitive and detail specific, like copy from the text) for mention text and short surrounding text, this is the only way to find the exact position of the mention text in the text
-4. Aliases must include at least the mention text itself, following DOID entity name format for exact match
-5. One entity per line, no blank lines between entities
-6. If no entities found, output nothing
-
-=== OUTPUT NOW ===
-"""
-        
-        messages = [{"role": "user", "content": prompt}]
-        response = self.llm_client.call(messages, max_tokens=512)
-        
         entities = []
-        for line in response.split('\n'):
-            line = line.strip()
-            if not line or not line.startswith('ENTITY:'): continue
-            
+        for span_info in entity_spans:
+            entities.append({
+                'text': span_info['text'],
+                'start_pos': span_info['start_pos'],
+                'end_pos': span_info['end_pos'],
+                'context_left': text[:span_info['start_pos']],
+                'context_right': text[span_info['end_pos']:],
+                'aliases': [span_info['text']],
+                'link_entities': {},
+                'candidates': []
+            })
+
+        logger.info(f"[NER] Built {len(entities)} entity dicts")
+        return entities
+    
+    def _erp(self, entities: List[Dict]) -> List[List[Dict]]:
+        """Entity Reduction Processor - filter candidates based on context"""
+        logger.info(f"[ERP] Starting ERP for {len(entities)} entities")
+        
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            prompt = erp(entity, self.obo_linker, is_parser=False)
+            prompts.append(prompt)
+        
+        # Call LLM
+        logger.info(f"[ERP] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[ERP] Received {len(llm_responses)} responses")
+        
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[ERP] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
+        
+        # Parse responses
+        parser = erp(None, None, is_parser=True)
+        parsed_doids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
             try:
-                parts = line.replace('ENTITY:', '').strip().split('|')
-                if len(parts) < 3: continue
-                
-                mention_text = parts[0].strip()
-                surrounding_text = parts[1].strip()
-                aliases = [i.strip() for i in parts[2].strip().split(',') if i.strip()]
-
-                # Find position of surrounding text in text
-                if len(text.split(mention_text)) > 2:
-                    start_pos_surrounding = text.find(surrounding_text)
-                    start_pos = text.find(mention_text, start_pos_surrounding - 1)
-                else:
-                    start_pos = text.find(mention_text)
-
-                entities.append({
-                    'text': mention_text,
-                    'start_pos': start_pos,
-                    'end_pos': start_pos + len(mention_text),
-                    'context_left': text[:start_pos],
-                    'context_right': text[start_pos + len(mention_text):],
-                    'aliases': aliases,
-                    'link_entities': {},
-                    'confidence': 0.0,
-                    'candidates': []
-                })
+                doids = parser(response)
+                parsed_doids.append(doids)
+                logger.debug(f"[ERP] Entity '{entity['text']}': Parsed {len(doids)} DOIDs: {doids[:5]}")
             except Exception as e:
-                logger.warning(f"Error parsing entity line '{line}': {e}")
-                continue
+                logger.warning(f"[ERP] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[ERP] Raw response: {response[:200]}")
+                parsed_doids.append([])
         
-        return entities
+        # Get entity info from OBO linker
+        logger.info(f"[ERP] Fetching entity info from DOID for {sum(len(doids) for doids in parsed_doids)} DOIDs")
+        results = []
+        for idx, (entity, doids) in enumerate(zip(entities, parsed_doids)):
+            entity_infos = []
+            for doid in doids:
+                info = self.obo_linker.id(doid)
+                if 'error' not in info and 'id' in info:
+                    entity_infos.append(info)
+                else:
+                    logger.debug(f"[ERP] Entity '{entity['text']}': DOID {doid} error: {info.get('error', 'Entity not found')}")
+            results.append(entity_infos)
+            logger.debug(f"[ERP] Entity '{entity['text']}': Got {len(entity_infos)} valid entity infos")
+        
+        logger.info(f"[ERP] Completed: {[len(r) for r in results]} candidates per entity")
+        return results
     
-
-    def _parse_linked_entity(self, output: str) -> tuple:
-        """Parse entity ID and confidence from LLM output"""
-        entity_id = None
-        confidence = None
+    def _del_prior_entity_linker(self, entities: List[Dict], candidates: List[List[Dict]]) -> List[Dict]:
+        """Prior Entity Linker - uses common medical knowledge"""
+        logger.info(f"[DEL-PRIOR] Starting Prior Entity Linker for {len(entities)} entities")
         
-        for line in output.split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            
-            if entity_id is None:
-                if line.upper().startswith('ENTITY ID:'):
-                    entity_id = line.split(':', 1)[1].strip()
-                elif line.upper().startswith('ENTITY ID'):
-                    parts = line.split(None, 2)
-                    if len(parts) >= 3:
-                        entity_id = parts[2].strip()
-                elif 'ENTITY' in line.upper() and 'ID' in line.upper():
-                    match = re.search(r'(?:ENTITY\s+ID[:\s]+|ID[:\s]+)([^\s]+)', line, re.IGNORECASE)
-                    if match:
-                        entity_id = match.group(1).strip()
-            
-            if confidence is None:
-                if line.upper().startswith('CONFIDENCE:'):
-                    try:
-                        confidence = float(line.split(':', 1)[1].strip())
-                    except (ValueError, IndexError):
-                        pass
-                elif line.upper().startswith('CONFIDENCE'):
-                    parts = line.split(None, 1)
-                    if len(parts) >= 2:
-                        try:
-                            confidence = float(parts[1].strip())
-                        except ValueError:
-                            pass
-                elif 'CONFIDENCE' in line.upper():
-                    match = re.search(r'(?:CONFIDENCE[:\s]+|CONF[:\s]+)([0-9.]+)', line, re.IGNORECASE)
-                    if match:
-                        try:
-                            confidence = float(match.group(1).strip())
-                        except ValueError:
-                            pass
-            
-            if entity_id is not None and confidence is not None:
-                break
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            cands = candidates[idx] if idx < len(candidates) else []
+            prompt = del_prior_entity_linker(entity, cands, self.obo_linker, is_parser=False)
+            prompts.append(prompt)
+            logger.debug(f"[DEL-PRIOR] Entity {idx+1}/{len(entities)} '{entity['text']}': {len(cands)} candidates, prompt ({len(prompt)} chars)")
+            if idx == 0:  # Log first prompt as sample
+                logger.debug(f"[DEL-PRIOR] Sample prompt (first entity):\n{prompt[:500]}...")
         
-        if entity_id:
-            entity_id = entity_id.strip()
-            if entity_id.upper() in ['<NIL>', 'NIL', 'NONE', 'NULL', '']:
-                entity_id = None
+        # Call LLM
+        logger.info(f"[DEL-PRIOR] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[DEL-PRIOR] Received {len(llm_responses)} responses")
         
-        if confidence is not None:
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[DEL-PRIOR] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
+        
+        # Parse responses
+        parser = del_prior_entity_linker(None, None, None, is_parser=True)
+        parsed_doids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
             try:
-                confidence = float(confidence)
-                confidence = max(0.0, min(1.0, confidence))
-            except (ValueError, TypeError):
-                confidence = 0.0
-        else:
-            confidence = 0.0
+                doid = parser(response)
+                parsed_doids.append(doid)
+                logger.debug(f"[DEL-PRIOR] Entity '{entity['text']}': Parsed DOID: {doid}")
+            except Exception as e:
+                logger.warning(f"[DEL-PRIOR] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[DEL-PRIOR] Raw response: {response[:200]}")
+                parsed_doids.append(None)
         
-        return entity_id, confidence
-
-    def _get_candidates_for_entities(self, entities: List[Dict]) -> List[Dict]:
-        """
-        Get candidates and link entities.
-
-        This version mirrors the GraphLinker behaviour for candidate discovery:
-        - Use `find_near_matches_for_span` over the DOID ontology
-        - Do NOT use `self.entity_db.get_candidates`
-        - Keep the OneNet pipeline structure (LLM can still re-rank/pick)
-        """
-        candidate_prompts = []
-        
-        if not self.entities_matcher:
-            logger.warning("Ontology matcher not initialized; no candidates will be generated.")
-        
-        # Unpack ontology matcher (see `graph_linker.parse_obo_file`)
-        if self.entities_matcher:
-            _, term_to_entities, sym_spell = self.entities_matcher
-        else:
-            term_to_entities, sym_spell = {}, None
-        
-        for ent_idx, entity in enumerate(entities):
-            entity_names = [entity['text']] + entity.get('aliases', [])
-            candidate_dicts: List[Dict[str, Any]] = []
-            
-            # Use ontology-based fuzzy matching to get DOID candidates
-            if term_to_entities and sym_spell:
-                seen_ids = set()
-                for name in entity_names:
-                    name = name.strip()
-                    if not name:
-                        continue
-                    try:
-                        near_matches = find_near_matches_for_span(
-                            name,
-                            term_to_entities,
-                            sym_spell,
-                            top_k=self.top_k,
-                            min_confidence=0.7,
-                            min_similarity=0.7,
-                        )
-                    except Exception as e:
-                        logger.debug(f"Error in find_near_matches_for_span for '{name}': {e}")
-                        continue
-                    
-                    for cand in near_matches:
-                        cand_id = cand.get('id')
-                        if not cand_id or cand_id in seen_ids:
-                            continue
-                        seen_ids.add(cand_id)
-                        title = cand.get('name', '')
-                        description = cand.get('def', '')
-                        synonyms = cand.get('synonyms', [])
-                        if synonyms:
-                            description = (description + "\nSynonyms: " + ", ".join(synonyms)).strip()
-                        if title:
-                            candidate_dicts.append({
-                                'id': cand_id,
-                                'title': title,
-                                'description': description or f"Entity: {title}",
-                            })
-            
-            entities[ent_idx]['candidates'] = candidate_dicts
-            
-            if candidate_dicts and self.llm_client:
-                candidate_prompts.append(self._create_linking_prompt(entity, candidate_dicts))
+        # Get entity info from OBO linker
+        logger.info(f"[DEL-PRIOR] Fetching entity info from DOID for {len([d for d in parsed_doids if d])} DOIDs")
+        results = []
+        for idx, (entity, doid) in enumerate(zip(entities, parsed_doids)):
+            if doid:
+                info = self.obo_linker.id(doid)
+                if 'error' not in info and 'id' in info:
+                    results.append(info)
+                    logger.debug(f"[DEL-PRIOR] Entity '{entity['text']}': Got entity info for {doid}: {info.get('label', 'N/A')}")
+                else:
+                    logger.warning(f"[DEL-PRIOR] Entity '{entity['text']}': DOID {doid} error: {info.get('error', 'Entity not found')}")
+                    results.append({'id': doid, 'label': 'Unknown', 'description': '', 'aliases': []})
             else:
-                candidate_prompts.append(None)
-
-        if any(p is not None for p in candidate_prompts) and self.llm_client:
-            outputs = self.llm_client.call_batch(
-                [p for p in candidate_prompts if p is not None],
-                max_tokens=512
-            )
-            linked_results = [self._parse_linked_entity(o) for o in outputs]
-            
-            output_idx = 0
-            for i, prompt in enumerate(candidate_prompts):
-                if prompt is not None:
-                    entity_id, confidence = linked_results[output_idx]
-                    output_idx += 1
-                    if entity_id:
-                        entities[i]['link_entities'] = {'id': entity_id}
-                elif entities[i]['candidates']:
-                    # Fallback to first candidate if no LLM decision
-                    entities[i]['link_entities'] = {'id': entities[i]['candidates'][0]['id']}
-
-        return entities
-
-    def _create_linking_prompt(self, entity: Dict, candidates: List[Dict]) -> List[Dict]:
-        """Create OneNet-style prompt for DOID entity linking"""
-        context = f"{entity['context_left']} ###{entity['text']}### {entity['context_right']}"
-        context = ' '.join(context.split())
+                logger.warning(f"[DEL-PRIOR] Entity '{entity['text']}': No DOID parsed")
+                results.append({'id': None, 'label': 'Unknown', 'description': '', 'aliases': []})
         
-        # Shuffle candidates if enabled
-        if self.shuffle_candidates:
-            shuffled_candidates = random.sample(candidates, len(candidates))
-        else:
-            shuffled_candidates = candidates
+        logger.info(f"[DEL-PRIOR] Completed: {len([r for r in results if r.get('id')])} entities linked")
+        return results
+
+    def _del_contextual_entity_linker(self, entities: List[Dict], candidates: List[List[Dict]]) -> List[Dict]:
+        """Contextual Entity Linker - uses specific context"""
+        logger.info(f"[DEL-CONTEXT] Starting Contextual Entity Linker for {len(entities)} entities")
         
-        prompt = f"""KNOWLEDGE BASE: Human Disease Ontology (DOID)
-TASK: Link Medical Mention to DOID Disease
-
-=== MEDICAL MENTION ===
-Mention: {entity['text']}
-Context: {context}
-
-=== CANDIDATE DISEASES ===
-"""
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            cands = candidates[idx] if idx < len(candidates) else []
+            prompt = del_contextual_entity_linker(entity, cands, self.obo_linker, is_parser=False)
+            prompts.append(prompt)
+            logger.debug(f"[DEL-CONTEXT] Entity {idx+1}/{len(entities)} '{entity['text']}': {len(cands)} candidates, prompt ({len(prompt)} chars)")
+            if idx == 0:  # Log first prompt as sample
+                logger.debug(f"[DEL-CONTEXT] Sample prompt (first entity):\n{prompt[:500]}...")
         
-        for i, candidate in enumerate(shuffled_candidates[:self.top_k]):
-            candidate_id = candidate.get('id', 'N/A')
-            candidate_title = candidate.get('title', 'Unknown')
-            candidate_desc = candidate.get('description', '')[:100] if candidate.get('description') else ''
-            prompt += f"{i+1}. {candidate_title} (ID: {candidate_id})"
-            if candidate_desc:
-                prompt += f"\n   Description: {candidate_desc}"
-            prompt += "\n"
+        # Call LLM
+        logger.info(f"[DEL-CONTEXT] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[DEL-CONTEXT] Received {len(llm_responses)} responses")
         
-        prompt += f"""
-=== YOUR TASK ===
-Select the disease that best matches the mention in context.
-
-CRITERIA:
-1. Name match: Does the name match the medical term?
-2. Specificity: Is it the right level of detail?
-3. Context fit: Does it fit the clinical context?
-
-=== REQUIRED OUTPUT FORMAT ===
-You MUST output in this EXACT format (both fields required):
-ENTITY ID: [candidate_id_from_list_above]
-CONFIDENCE: [confidence_score_between_0.0_and_1.0]
-
-Where:
-- ENTITY ID: The exact ID from the candidate list (e.g., "DOID:12345")
-- CONFIDENCE: A number between 0.0 and 1.0 indicating how confident you are:
-  * 0.9-1.0: Very high confidence (exact match, clear context)
-  * 0.7-0.9: High confidence (good match, some ambiguity)
-  * 0.5-0.7: Medium confidence (partial match, some uncertainty)
-  * 0.0-0.5: Low confidence (weak match, high uncertainty)
-
-=== CRITICAL: FORMAT EXAMPLE ===
-If candidate #2 is the best match and you're very confident:
-ENTITY ID: DOID:12345
-CONFIDENCE: 0.95
-
-If candidate #1 is a good match but you're moderately confident:
-ENTITY ID: DOID:67890
-CONFIDENCE: 0.75
-
-If no candidate matches well:
-ENTITY ID: <NIL>
-CONFIDENCE: 0.2
-
-=== STRICT REQUIREMENTS ===
-1. MUST output "ENTITY ID: " followed by the candidate ID or "<NIL>"
-2. MUST output "CONFIDENCE: " followed by a number between 0.0 and 1.0
-3. Both lines are REQUIRED
-4. Use exact candidate ID from the list above
-5. Confidence must be a valid float between 0.0 and 1.0
-6. NO additional text, NO explanations, ONLY these two lines
-
-=== OUTPUT NOW ===
-"""
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[DEL-CONTEXT] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
         
-        return [{"role": "user", "content": prompt}]
+        # Parse responses
+        parser = del_contextual_entity_linker(None, None, None, is_parser=True)
+        parsed_doids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
+            try:
+                doid = parser(response)
+                parsed_doids.append(doid)
+                logger.debug(f"[DEL-CONTEXT] Entity '{entity['text']}': Parsed DOID: {doid}")
+            except Exception as e:
+                logger.warning(f"[DEL-CONTEXT] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[DEL-CONTEXT] Raw response: {response[:200]}")
+                parsed_doids.append(None)
+        
+        # Get entity info from OBO linker
+        logger.info(f"[DEL-CONTEXT] Fetching entity info from DOID for {len([d for d in parsed_doids if d])} DOIDs")
+        results = []
+        for idx, (entity, doid) in enumerate(zip(entities, parsed_doids)):
+            if doid:
+                info = self.obo_linker.id(doid)
+                if 'error' not in info and 'id' in info:
+                    results.append(info)
+                    logger.debug(f"[DEL-CONTEXT] Entity '{entity['text']}': Got entity info for {doid}: {info.get('label', 'N/A')}")
+                else:
+                    logger.warning(f"[DEL-CONTEXT] Entity '{entity['text']}': DOID {doid} error: {info.get('error', 'Entity not found')}")
+                    results.append({'id': doid, 'label': 'Unknown', 'description': '', 'aliases': []})
+            else:
+                logger.warning(f"[DEL-CONTEXT] Entity '{entity['text']}': No DOID parsed")
+                results.append({'id': None, 'label': 'Unknown', 'description': '', 'aliases': []})
+        
+        logger.info(f"[DEL-CONTEXT] Completed: {len([r for r in results if r.get('id')])} entities linked")
+        return results
     
+    def _ecj(self, entities: List[Dict], candidates: List[List[Dict]]) -> List[Dict]:
+        """Entity Consensus Judger - final check"""
+        logger.info(f"[ECJ] Starting Entity Consensus Judger for {len(entities)} entities")
+        
+        # Generate prompts
+        prompts = []
+        for idx, entity in enumerate(entities):
+            # candidates is a list of lists, each containing [prior_result, contextual_result]
+            # Get the list of 2 dicts (prior and contextual results)
+            cand_list = candidates[idx] if idx < len(candidates) else []
+            # Ensure we have at least 2 candidates (prior and contextual)
+            if len(cand_list) < 2:
+                # Pad with empty dicts if needed
+                while len(cand_list) < 2:
+                    cand_list.append({'id': None, 'label': 'Unknown', 'description': '', 'aliases': []})
+            # Pass the list of 2 dicts (prior and contextual) to ecj function
+            cands = cand_list[:2]
+            
+            prompt = ecj(entity, cands, self.obo_linker, is_parser=False)
+            prompts.append(prompt)
+            logger.debug(f"[ECJ] Entity {idx+1}/{len(entities)} '{entity['text']}': {len(cands)} candidates, prompt ({len(prompt)} chars)")
+            if idx == 0:  # Log first prompt as sample
+                logger.debug(f"[ECJ] Sample prompt (first entity):\n{prompt[:500]}...")
+        
+        # Call LLM
+        logger.info(f"[ECJ] Calling LLM with {len(prompts)} prompts")
+        llm_responses = self.llm_client.call_batch(prompts)
+        logger.info(f"[ECJ] Received {len(llm_responses)} responses")
+        
+        # Log sample responses
+        for idx, (entity, response) in enumerate(zip(entities[:3], llm_responses[:3])):
+            logger.debug(f"[ECJ] Entity '{entity['text']}' response ({len(response)} chars):\n{response[:300]}...")
+        
+        # Parse responses
+        parser = ecj(None, None, None, is_parser=True)
+        parsed_doids = []
+        for idx, (entity, response) in enumerate(zip(entities, llm_responses)):
+            try:
+                doid = parser(response)
+                parsed_doids.append(doid)
+                logger.debug(f"[ECJ] Entity '{entity['text']}': Parsed DOID: {doid}")
+            except Exception as e:
+                logger.warning(f"[ECJ] Entity '{entity['text']}': Failed to parse response: {e}")
+                logger.debug(f"[ECJ] Raw response: {response[:200]}")
+                parsed_doids.append(None)
+        
+        # Get entity info from OBO linker
+        logger.info(f"[ECJ] Fetching entity info from DOID for {len([d for d in parsed_doids if d])} DOIDs")
+        results = []
+        for idx, (entity, doid) in enumerate(zip(entities, parsed_doids)):
+            if doid:
+                info = self.obo_linker.id(doid)
+                if 'error' not in info and 'id' in info:
+                    results.append(info)
+                    logger.debug(f"[ECJ] Entity '{entity['text']}': Got entity info for {doid}: {info.get('label', 'N/A')}")
+                else:
+                    logger.warning(f"[ECJ] Entity '{entity['text']}': DOID {doid} error: {info.get('error', 'Entity not found')}")
+                    results.append({'id': doid, 'label': 'Unknown', 'description': '', 'aliases': []})
+            else:
+                logger.warning(f"[ECJ] Entity '{entity['text']}': No DOID parsed")
+                results.append({'id': None, 'label': 'Unknown', 'description': '', 'aliases': []})
+        
+        logger.info(f"[ECJ] Completed: {len([r for r in results if r.get('id')])} entities linked")
+        return results
+
     def predict(self,
                 text: str,
                 doc: Optional[Doc] = None,
                 uppercase: Optional[bool] = False) -> Dict[Tuple[int, int], EntityPrediction]:
-        """Predict entities using OneNet approach with batch processing"""
+        logger.info(f"[PREDICT] Starting prediction for text length: {len(text)}")
         predictions = {}
-        
-        detected_entities = self._detect_entities_with_llm(text)
-        
-        if not detected_entities:
-            return predictions
-        
-        detected_entities = self._get_candidates_for_entities(detected_entities)
-        
-        for entity in detected_entities:
-            span = (entity['start_pos'], entity['end_pos'])
-            entity_id = entity.get('link_entities', {}).get('id') or UnknownEntity.NIL.value
-            candidates = {c['id'] for c in entity.get('candidates', [])}
-            predictions[span] = EntityPrediction(span, entity_id, candidates)
 
+        # Step 1: Entity Detection
+        logger.info("[PREDICT] === Step 1: Entity Detection ===")
+        detected_entities = self._detect_entities_with_spacy(text, doc)
+        logger.info(f"[PREDICT] Detected {len(detected_entities)} entities: {[e['text'] for e in detected_entities]}")
+
+        if not detected_entities:
+            logger.info("[PREDICT] No entities detected, returning empty predictions")
+            return predictions
+
+        # Step 2: ERP - Entity Reduction Processor
+        logger.info("[PREDICT] === Step 2: ERP (Entity Reduction Processor) ===")
+        erp_results = self._erp(detected_entities)
+        logger.info(f"[PREDICT] ERP results: {[len(r) for r in erp_results]} candidates per entity")
+        for idx, (entity, cands) in enumerate(zip(detected_entities, erp_results)):
+            logger.debug(f"[PREDICT] Entity '{entity['text']}': {len(cands)} candidates after ERP: {[c.get('label', c.get('id', 'N/A')) for c in cands[:3]]}")
+
+        # Step 3: DEL - Dual-perspective Entity Linker
+        logger.info("[PREDICT] === Step 3: DEL (Dual-perspective Entity Linker) ===")
+        logger.info("[PREDICT] --- 3a: Prior Entity Linker ---")
+        del_prior_entity_linker_results = self._del_prior_entity_linker(detected_entities, erp_results)
+        logger.info("[PREDICT] --- 3b: Contextual Entity Linker ---")
+        del_contextual_entity_linker_results = self._del_contextual_entity_linker(detected_entities, erp_results)
+        
+        # Combine prior and contextual results
+        candidates = [[i, j] for i, j in zip(del_prior_entity_linker_results, del_contextual_entity_linker_results)]
+        logger.info(f"[PREDICT] DEL results combined: {len(candidates)} entity pairs")
+        for idx, (entity, prior, context) in enumerate(zip(detected_entities, del_prior_entity_linker_results, del_contextual_entity_linker_results)):
+            prior_id = prior.get('id') if prior else None
+            context_id = context.get('id') if context else None
+            logger.debug(f"[PREDICT] Entity '{entity['text']}': Prior={prior_id}, Context={context_id}")
+
+        # Step 4: ECJ - Entity Consensus Judger
+        logger.info("[PREDICT] === Step 4: ECJ (Entity Consensus Judger) ===")
+        linked_entities = self._ecj(detected_entities, candidates)
+        logger.info(f"[PREDICT] ECJ results: {len(linked_entities)} final entities")
+
+        # Build predictions
+        logger.info("[PREDICT] === Building final predictions ===")
+        for entity, linked_entity, cands in zip(detected_entities, linked_entities, erp_results):
+            span = (entity['start_pos'], entity['end_pos'])
+            entity_id = linked_entity.get('id') if linked_entity else None
+            if entity_id:
+                candidate_set = {c.get('id') for c in cands if c.get('id')}
+                
+                logger.debug(f"[PREDICT] Entity '{entity['text']}' ({span}): Linked to {entity_id} ({linked_entity.get('label', 'N/A')}), {len(candidate_set)} candidates")
+                
+                predictions[span] = EntityPrediction(span, entity_id, candidate_set)
+
+        logger.info(f"[PREDICT] Completed: {len(predictions)} predictions made")
         return predictions

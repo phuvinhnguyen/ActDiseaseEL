@@ -1,16 +1,15 @@
 from enum import Enum
 from typing import Dict, Set, Tuple, Iterator, Optional, List, Any
-import os
-
-import logging
+import time, sys, logging
 
 from elevant import settings
 from elevant.evaluation.groundtruth_label import GroundtruthLabel
 from elevant.models.database import Database
 from elevant.models.gender import Gender
 from elevant.helpers.entity_database_reader import EntityDatabaseReader
+import sqlite3
 
-# Optional fuzzy matching
+
 try:
     from rapidfuzz import fuzz, process
     FUZZY_AVAILABLE = True
@@ -54,7 +53,7 @@ class LoadedInfo:
 
 
 class EntityDatabase:
-    def __init__(self):
+    def __init__(self, db_path = "fuzzy_index.sqlite3"):
         self.entities = set()
         self.entities: Set[str]
         self.name_to_entities_db = {}
@@ -104,6 +103,16 @@ class EntityDatabase:
         self.wikipedia_id2wikipedia_title = dict()
         self.type_adjustments = {}
         self.loaded_info = {}
+
+        try:
+            with sqlite3.connect(db_path) as conn:
+                count = conn.execute("SELECT COUNT(*) FROM ft").fetchone()[0]
+            self._loaded = count > 0
+        except:
+            self._loaded = False
+        
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS ft USING fts5(qid, name, tokenize='trigram')")
 
     def contains_entity(self, entity_id: str) -> bool:
         return entity_id in self.entities
@@ -289,7 +298,7 @@ class EntityDatabase:
             return self.hyperlink_to_most_popular_candidates_db[alias]
         return set()
 
-    def get_candidates(self, alias: str) -> Set[str]:
+    def get_candidates(self, alias: str, max_results: int = 250) -> Set[str]:
         entity_ids = set()
         if alias in self.name_to_entities_db:
             entity_ids = entity_ids.union(self.name_to_entities_db[alias])
@@ -299,8 +308,44 @@ class EntityDatabase:
             entity_ids = entity_ids.union(self.family_name_aliases[alias])
         if alias in self.link_aliases:
             entity_ids = entity_ids.union(self.link_aliases[alias])
+        
+        if not entity_ids:
+            alias_lower = alias.lower()
+            if alias_lower in self.name_to_entities_db:
+                entity_ids = entity_ids.union(self.name_to_entities_db[alias_lower])
+            if alias_lower in self.alias_to_entities_db:
+                entity_ids = entity_ids.union(self.alias_to_entities_db[alias_lower])
+            if alias_lower in self.family_name_aliases:
+                entity_ids = entity_ids.union(self.family_name_aliases[alias_lower])
+            if alias_lower in self.link_aliases:
+                entity_ids = entity_ids.union(self.link_aliases[alias_lower])
+
+        if FUZZY_AVAILABLE:
+            entity_ids = entity_ids.union(self._fuzzy_search_candidates(alias, max_results=max_results))
+        
         return entity_ids
-    
+
+    def _ensure_index(self):
+        if self._loaded: return
+        self.conn.executemany(
+            "INSERT INTO ft(qid, name) VALUES (?, ?)",
+            self.entity_name_db.items()
+        )
+        self.conn.commit()
+        self._loaded = True
+
+    def _fuzzy_search_candidates(self, query: str, max_results: int = 10) -> Set[str]:
+        self._ensure_index()
+        cur = self.conn.execute(
+            f"SELECT qid, name FROM ft WHERE name MATCH ? ORDER BY rank LIMIT {max_results}",
+            (f'"{query.replace("\"", "").replace("\'", "")}"',)
+        )
+        top = sorted(
+            [(q, n, fuzz.WRatio(query, n)) for q, n in cur],
+            key=lambda x: x[2], reverse=True
+        )
+        return {q for q, _, _ in top}
+
     def contains_alias(self, alias: str) -> bool:
         return alias in self.name_to_entities_db or \
                alias in self.alias_to_entities_db or \

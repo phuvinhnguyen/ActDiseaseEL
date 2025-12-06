@@ -12,7 +12,7 @@ mkdir -p logs
 mkdir -p ../doid-results
 
 # Input corpus (modify as needed)
-INPUT_CORPUS="multilingual_healthcare_history.jsonl"
+INPUT_CORPUS="english_healthcare_history.jsonl"
 if [ ! -f "$INPUT_CORPUS" ]; then
     echo "ERROR: Input corpus not found: $INPUT_CORPUS"
     exit 1
@@ -37,8 +37,8 @@ START_TIME=$(date +%s)
 
 python link_text.py \
     "$INPUT_CORPUS" \
-    ../doid-results/multilingual_onenet_llm_doid.jsonl \
-    -l onenet-llm \
+    ../doid-results/english_graph_llm_doid_v2.jsonl \
+    -l graph-llm \
     --article_format \
     --custom_kb
 
@@ -47,8 +47,8 @@ ELAPSED=$((END_TIME - START_TIME))
 AVG_TIME=$(echo "scale=2; $ELAPSED / $NUM_DOCS" | bc -l)
 
 echo ""
-echo "✓ Onenet-LLM (DOID) complete"
-echo "  Output: ../doid-results/multilingual_onenet_llm_doid.jsonl"
+echo "✓ Graph-LLM (DOID) complete"
+echo "  Output: ../doid-results/english_graph_llm_doid_v2.jsonl"
 echo "  Total time: ${ELAPSED}s"
 echo "  Average per document: ${AVG_TIME}s"
 
