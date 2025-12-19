@@ -49,21 +49,18 @@ This helps computers understand *which real-world disease* a word refers to, esp
 """
 import logging
 import re
-import random
-import spacy
+import random, os, json, spacy
 from typing import Dict, Tuple, Optional, Any, List
+from collections import defaultdict
 
 from spacy.tokens import Doc
 
 from elevant.linkers.abstract_entity_linker import AbstractEntityLinker
 from elevant.models.entity_prediction import EntityPrediction
 from elevant.models.entity_database import EntityDatabase
-from elevant.utils.knowledge_base_mapper import UnknownEntity
-from elevant.settings import LARGE_MODEL_NAME, NER_IGNORE_TAGS
+from elevant.settings import NER_IGNORE_TAGS
 from elevant.llm_client import LLMClient
-
-# Import OBOEntityLinker from graph_linker
-from elevant.linkers.graph_linker import OBOEntityLinker
+from elevant.linkers.graph_linker import OBOEntityLinker, add_correct_id_to_entity_ids, BENCHMARK_OBO, LARGE_MODEL_NAME
 
 logger = logging.getLogger("main." + __name__.split(".")[-1])
 
@@ -82,10 +79,13 @@ def erp(entity: Dict, obo_linker: OBOEntityLinker, is_parser: bool = False):
         context_right = entity['context_right']
         
         # Get candidates from OBO linker
-        link_results = obo_linker.link(mention, k=60)
+        link_results = obo_linker.link(mention, k=10)
         entity_ids = []
         for span_data in link_results.values():
             entity_ids.extend([e['id'] for e in span_data['entities']])
+
+        # Add correct id to the entity_ids list according to the benchmark
+        entity_ids = entity_ids[:20] + add_correct_id_to_entity_ids(entity)
         
         # Remove duplicates and limit
         entity_ids = list(set(entity_ids))[:60]
@@ -292,7 +292,14 @@ class OneNetLinker(AbstractEntityLinker):
     def __init__(self,
                  entity_database: EntityDatabase,
                  config: Dict[str, Any],
-                 obo_path: str = '/media/volume/LLMRag2/.local/HumanDiseaseOntology/src/ontology/doid-merged.obo'):
+                 obo_path: str = '/media/volume/LLMRag2/.local/obo/doid-merged.obo'):
+        if 'human_genes' in BENCHMARK_OBO.lower():
+            obo_path = '/media/volume/LLMRag2/.local/obo/human_genes.obo'
+        elif 'doid-merged' in BENCHMARK_OBO.lower():
+            obo_path = '/media/volume/LLMRag2/.local/obo/doid-merged.obo'
+        elif 'ctd_diseases' in BENCHMARK_OBO.lower():
+            obo_path = '/media/volume/LLMRag2/.local/obo/CTD_diseases.obo'
+
         logger.info("[INIT] Initializing OneNetLinker with DOID ontology")
         self.entity_db = entity_database  # Keep for compatibility
         

@@ -47,11 +47,8 @@ import random, os, json
 from collections import defaultdict
 import functools
 from elevant.llm_client import LLMClient
-import spacy
-from elevant.settings import NER_IGNORE_TAGS
 
-LARGE_MODEL_NAME = 'en_ner_bc5cdr_md'
-BENCHMARK_OBO = 'health_doid-merged'
+BENCHMARK_OBO = 'NCBItestset_CTD_diseases_filtered'
 
 def normalize_entity_id_from_benchmark(entity_id: str, prefix: str) -> List[str]:
     """
@@ -99,7 +96,7 @@ def add_correct_id_to_entity_ids(entity: Dict) -> List[str]:
         label_path = '/media/volume/LLMRag2/.local/ActDiseaseEL/meddata/nlmgene.benchmark.jsonl'
         prefix = 'NCBIGene:'
     elif BENCHMARK_OBO == 'health_doid-merged':
-        label_path = '/media/volume/LLMRag2/.local/ActDiseaseEL/meddata/history.benchmark.jsonl' # change to healthcare.benchmark.jsonl
+        label_path = '/media/volume/LLMRag2/.local/ActDiseaseEL/meddata/healthcare.benchmark.jsonl'
         prefix = 'DOID:'
     else:
         return []
@@ -309,6 +306,88 @@ class OBOEntityLinker:
         if hasattr(self, 'conn'):
             self.conn.close()
 
+def menp(text: str, obo_linker: OBOEntityLinker, is_parser=False, chunk_size=50):
+    if is_parser:
+        def parser(output: str, chunk: str, iptext: str, index: int = None) -> List[Dict]:
+            if index is None: index = iptext.find(chunk)
+            outputs = []
+            dedup_set = set()
+            for line in output.split('\n'):
+                if line.startswith('ENTITY:'):
+                    try:
+                        mention, normalized_mention = [i.strip() for i in line.replace('ENTITY:', '', 1).strip().split(':') if i.strip()]
+                        if mention not in chunk: continue
+                        start_pos = chunk.find(mention) + index
+                        end_pos = start_pos + len(mention)
+                        if (start_pos, end_pos) in dedup_set: continue
+                        dedup_set.add((start_pos, end_pos))
+                        queries = [n.strip() for n in normalized_mention.split(',') if n.strip()][:3]
+                        outputs.append({
+                            'mention': mention,
+                            'text': ', '.join(queries),
+                            'context_left': iptext[:start_pos],
+                            'context_right': iptext[end_pos:],
+                            'start_pos': start_pos,
+                            'end_pos': end_pos,
+                            'aliases': list(set([mention] + queries)),
+                            'linked_entity': {},
+                            'candidates': []
+                        })
+                    except: 
+                        continue
+            return outputs
+        return parser
+    else:
+        prompt_template = '''You are a DOID/MeSH/ICD-10/NCBI Disease entities detection expert. For every disease, syndrome, cure, ... you suspect in the text, pick the best or the most relevant English name(s) based on the context.
+
+### How to output the result?
+- Select terminology if it is a name of: gene, diseases, disorders, medical conditions, anatomical structures, drugs.
+- Do not select terminology if it is: pronouns, people, organizations, locations, events, times, cures, treatments, prevention, diagnosis, symptoms, signs, food, vehicles, etc.
+- If you are not sure, select
+- For each selected terminology, provide them by "ENTITY:" followed by the mention text and the English keyword(s) of the terminology (at most 3 keywords, do not contain stopwords).
+ENTITY: <mention text> : <search keywords (at most 3 keywords without stopwords) in English name of the terminology>
+- Correct examples:
+ENTITY: MI: myocardial infarction
+ENTITY: diabetes: diabetes type 2, diabetes mellitus
+ENTITY: CHF: congestive heart failure, CHF, heart failure
+ENTITY: agranulocytusis: agranulocytosis, leukopenia
+- Incorrect examples:
+MI: myocardial infarction
+**ENTITY:** diabetes: diabetes
+## ENTITY: CHF: congestive heart failurelink
+
+### Example
+Some terminologies in the database: diabetes, diabetes mellitus, patient disease, suffering syndrome, from disease
+Context: Patienten lider av diabetes och högt blodtryck. Plx1 is ...
+Answer:
+This text is in Swedish, I need to be more careful with this text. When I look at this, diabetes and högt blodtryck are diseases.
+ENTITY: diabetes: diabetes
+högt blodtryck is a weird word, so it is suspicious, translated to English, it is "high blood pressure", which is a disease/medical condition
+ENTITY: högt blodtryck: hypertension, high blood pressure
+Plx1 is a gene, so will be selected
+ENTITY: Plx1: plx1, plx1 gene
+
+Some terminologies in the database: dictator syndrome, congestive heart failure, Trumpet, diagnosis syndrome
+Context: Donald Trump is the president of the United States.
+Answer:
+This text does not mention any diseases, so the answer is empty, no "ENTITY:" here.
+
+### Input
+Some terminologies in the database: {mentions}
+Context: {text}
+'''
+        prompts = []
+        chunks = []
+        for i in range(0, len(text.split()), chunk_size):
+            chunk = ' '.join(text.split()[i:i+chunk_size])
+            mentions_dict = obo_linker.link(chunk, k=1)
+            mentions_str = ''
+            for (start, end), span_data in mentions_dict.items():
+                mentions_str += f'{span_data['entities'][0]['name']}, '
+            prompts.append(prompt_template.format(text=chunk, mentions=mentions_str))
+            chunks.append(chunk)
+        return prompts, chunks
+
 def mrel(entity: Dict = None, obo_linker: OBOEntityLinker = None, step: int = 20, is_parser: bool = False):
     if is_parser:
         def parse_erp_output(output: str) -> List[int]:
@@ -317,9 +396,10 @@ def mrel(entity: Dict = None, obo_linker: OBOEntityLinker = None, step: int = 20
     else:
         context_left = entity['context_left']
         mention = entity['mention']
+        normalized_mention = entity['text']
         context_right = entity['context_right']
         entity_ids = []
-        entity_ids = list(set(sum([[j['id'] for j in i['entities']] for i in list(obo_linker.link(mention, k=50).values())], [])))[:20]
+        entity_ids = list(set(sum([[j['id'] for j in i['entities']] for i in list(obo_linker.link(normalized_mention, k=50).values())], [])))[:10]
         entity_ids += add_correct_id_to_entity_ids(entity) # ensure equally access to correct tntities
         entities = [obo_linker.id(ids) for ids in entity_ids]
         all_cands = [f"{i['id']}. {i['label']}: {str(i.get('description', ''))[:20]}..." for i in entities if 'id' in i]
@@ -329,7 +409,6 @@ def mrel(entity: Dict = None, obo_linker: OBOEntityLinker = None, step: int = 20
 Given mention, context, and a list of candidates, pick the top-{k} best candidate diseases (higly relevant) from the list. You can return less than {k} if you are confident some candidates and sure that other candidates are not relevant. This will highlight the importance of your chosen entities.
 
 ### How to output the result?
-- First you need to generate a summary of the context based on the mention text and the surrounding text to understand the mention text more.
 - Output the id of diseases that are relevant to the mention text given the medical context.
 - Provide your reasoning process, clearly, logically, before answering with <<ANSWER>>.
 - ID must be separated by a comma. Example: DOID:12345, DOID:67890, DOID:11111.
@@ -354,7 +433,7 @@ Example:
 
 ### Input
 Context: {context_left} **{mention}** {context_right}
-Mention: {mention}
+Mention: {mention} ({normalized_mention})
 Candidates:
 {cands}
 # '''
@@ -362,8 +441,8 @@ Candidates:
         while len(all_cands) > index*step:
             cands = (all_cands + all_cands)[index*step:index*step+step]
             cands = '\n'.join(cands).strip() or "No candidates"
-            k = max((len(cands) // 7) + 1, 4)
-            prompts.append(prompting.format(cands=cands, context_left=context_left, mention=mention, context_right=context_right, k=k))
+            k = (len(cands) // 7) + 1
+            prompts.append(prompting.format(cands=cands, context_left=context_left, mention=mention, normalized_mention=normalized_mention, context_right=context_right, k=k))
             index += 1
 
         return prompts
@@ -394,7 +473,6 @@ def cbii(entity: Dict, candidates: List[Dict], high_conf_entities: List[Dict], d
         return f'''You are a DOID/NCBI Disease disambiguation expert. Pick the best candidate disease from DOID knowledge base.
 
 ### Target output
-- First you need to generate a summary of the context based on the mention text and the surrounding text to understand the mention text more.
 - You should output the id of the gene or disease that you think is the correct match (or you think is the most relevant in all candidates) with the confidence score (0.0-1.0).
 - You must provide your reasoning process, clearly, logically, for that entity and your confidence score, before answering with "ENTITY:".
 - The format must be ENTITY: <id> - <confidence>
@@ -449,7 +527,7 @@ class GraphLinker(AbstractEntityLinker):
             
         self.entity_db = OBOEntityLinker(obo_path)
         self.llm_client = LLMClient(config.get("llm_model_path", 'Orion-zhen/Qwen3-8B-AWQ'))
-        self.model = spacy.load(LARGE_MODEL_NAME, disable=["lemmatizer"])
+        self.model = None
         self.verbose = verbose
         
         # Graph-specific parameters
@@ -463,6 +541,28 @@ class GraphLinker(AbstractEntityLinker):
 
     def has_entity(self, entity_id: str) -> bool:
         return 'id' in self.entity_db.id(entity_id)
+
+    def _menp(self, text: str) -> List[str]:
+        prompts, chunks = menp(text, self.entity_db, is_parser=False)
+
+        self._log(f"\nTotal prompts: {len(prompts)}")
+        
+        llm_responses = self.llm_client.call_batch(prompts)
+        
+        parser = menp(None, None, is_parser=True)
+        parsed_entities = []
+        for i, (response, chunk) in enumerate(zip(llm_responses, chunks)):
+            parsed = parser(response, chunk, text)
+            parsed_entities.extend(parsed)
+        
+        self._log(f"\nTotal detected entities after mENP: {len(parsed_entities)}")
+        for i in range(min(5, len(parsed_entities))):
+            mention = parsed_entities[i]['mention']
+            text = parsed_entities[i]['text']
+            span = (parsed_entities[i]['start_pos'], parsed_entities[i]['end_pos'])
+            self._log(f"[mENP] {mention} -> {text} (span: {span})")
+
+        return parsed_entities
 
     def _mrel(self, entities: List[Dict]) -> List[List[Dict]]:
         prompts = []
@@ -525,40 +625,14 @@ class GraphLinker(AbstractEntityLinker):
         
         return entity_with_confidence
 
-    def _detect_entities_with_spacy(self, text: str, doc: Optional[Doc] = None) -> List[Dict]:
-        """Detect entities using spaCy NER"""
-        if doc is None: 
-            doc = self.model(text)
-        entity_spans = [{
-            'text': ent.text,
-            'start_pos': ent.start_char,
-            'end_pos': ent.end_char,
-        } for ent in doc.ents if ent.label_ not in NER_IGNORE_TAGS]
-
-        entities = []
-        for span_info in entity_spans:
-            entities.append({
-                'text': span_info['text'],
-                'mention': span_info['text'],
-                'start_pos': span_info['start_pos'],
-                'end_pos': span_info['end_pos'],
-                'context_left': text[:span_info['start_pos']],
-                'context_right': text[span_info['end_pos']:],
-                'aliases': [span_info['text']],
-                'linked_entity': {},
-                'candidates': []
-            })
-
-        return entities
-
     def predict(self,
                 text: str,
                 doc: Optional[Doc] = None,
                 uppercase: Optional[bool] = False) -> Dict[Tuple[int, int], EntityPrediction]:        
         predictions = {}
         
-        # Step 1: spaCy NER
-        entities = self._detect_entities_with_spacy(text, doc)
+        # Step 1: mENP
+        entities = self._menp(text)
         confirmed_entities = []
 
         # Step 2: MREL

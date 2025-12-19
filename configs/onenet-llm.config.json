@@ -1,6 +1,6 @@
 {
   "linker_name": "OneNet LLM Local",
-  "llm_model_path": "Qwen/Qwen3-8B",
+  "llm_model_path": "Orion-zhen/Qwen3-8B-AWQ",
   "top_k": 5,
   "shuffle_candidates": true,
   "experiment_description": "Optimized OneNet-style entity linking with batch processing. 3-5x faster than previous version."

@@ -48,6 +48,7 @@ def main(args):
     benchmarks = get_available_benchmarks() if "ALL" in args.benchmark else args.benchmark
 
     for benchmark in benchmarks:
+        os.environ['ELEVANT_BENCHMARK'] = benchmark
         benchmark_iterator = get_benchmark_iterator(benchmark)
 
         prediction_name_dir = convert_to_filename(args.prediction_name)

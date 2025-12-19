@@ -17,7 +17,7 @@ DEFAULT_HOST = "127.0.0.1"
 VLLM_SERVER_PROCESS = None
 
 class LLMClient:
-    def __init__(self, model_name: str, use_4bit: bool = True, port: int = None):
+    def __init__(self, model_name: str = 'Orion-zhen/Qwen3-8B-AWQ', use_4bit: bool = True, port: int = None):
         self.model_name = model_name
         self.port = port or int(os.getenv('VLLM_PORT', DEFAULT_VLLM_PORT))
         self.host = os.getenv('VLLM_HOST', DEFAULT_HOST)
@@ -104,7 +104,7 @@ class LLMClient:
         )
         
         # Wait for server to be ready
-        max_retries = 60
+        max_retries = 200
         for i in range(max_retries):
             if self._is_server_running() and self._verify_model():
                 print("✅ Server ready!")
@@ -134,7 +134,7 @@ class LLMClient:
     def call_batch(
         self,
         prompts: List[str],
-        max_new_tokens: int = 4096,
+        max_new_tokens: int = 512,
         temperature: float = 0.1,
         **sampling_kwargs
     ) -> List[str]:
@@ -182,65 +182,6 @@ class LLMClient:
             except: pass
 
 
-
-# from typing import List, Optional
-# from tqdm import tqdm
-# from vllm import LLM, SamplingParams
-# import torch
-
-# class LLMClient:
-#     def __init__(self, model_name: str, use_4bit: bool = True):
-#         """
-#         Initialize vLLM client with chat template support
-#         """
-#         self.llm = LLM(
-#             model=model_name,
-#             quantization="AWQ" if use_4bit else None,
-#             tensor_parallel_size=torch.cuda.device_count(),
-#             dtype="float16",
-#             trust_remote_code=True
-#         )
-#         self.tokenizer = self.llm.get_tokenizer()
-        
-#         # Check if model has chat template
-#         self.has_chat_template = (
-#             hasattr(self.tokenizer, 'chat_template') and 
-#             self.tokenizer.chat_template is not None
-#         )
-#         if self.has_chat_template:
-#             print(f"✅ Chat template detected. Will auto-format prompts for {model_name}")
-    
-#     def call_batch(
-#         self, 
-#         prompts: List[str], 
-#         max_new_tokens: int = 1024,
-#         temperature: float = 0.1,
-#         verbose: bool = False,
-#         **sampling_kwargs
-#     ) -> List[str]:
-#         if self.has_chat_template:
-#             formatted_prompts = [
-#                 self.tokenizer.apply_chat_template(
-#                     [{"role": "user", "content": prompt}],
-#                     tokenize=False,
-#                     add_generation_prompt=True,
-#                     enable_thinking=False,
-#                 )
-#                 for prompt in prompts
-#             ]
-#         else:
-#             # Raw prompts for base models
-#             formatted_prompts = prompts
-        
-#         sampling_params = SamplingParams(
-#             temperature=temperature,
-#             max_tokens=max_new_tokens,
-#             **sampling_kwargs
-#         )
-        
-#         outputs = self.llm.generate(formatted_prompts, sampling_params)
-#         return [out.outputs[0].text.split('</think>')[-1].strip() for out in outputs]
-    
-#     def call(self, prompt: str, **kwargs) -> str:
-#         """Generate single prompt without progress bar"""
-#         return self.call_batch([prompt], verbose=False, **kwargs)[0]
+if __name__ == "__main__":
+    llm_client = LLMClient()
+    print(llm_client.call("Hello, how are you?"))
