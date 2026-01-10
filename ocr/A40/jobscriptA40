@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#SBATCH -A NAISS2025-22-855 -p alvis
+#SBATCH -N 1 --gpus-per-node=A40:4
+#SBATCH -t 0-02:00:00
+#SBATCH -J deepseekocr-job
+#SBATCH -o deepseekocr-a40_%j.out
+#SBATCH -e deepseekocr-a40_%j.err
+
+echo "Job started on $(date)"
+echo "Running on nodes:"
+scontrol show hostnames $SLURM_NODELIST
+
+# load needed modules
+module load Python/3.11.3-GCCcore-12.3.0 virtualenv/20.23.1-GCCcore-12.3.0 JupyterLab/4.0.5-GCCcore-12.3.0
+
+# activate venv
+source ocr_env/bin/activate
+
+# run 4 processes in parallel, one per GPU
+for gpu_id in {0..3}; do
+    echo "Starting process on GPU $gpu_id"
+    python deepseekocrA40.py --gpu $gpu_id --total_gpus 4 &
+done
+
+# Wait for all processes to finish
+wait
+
+echo "Job finished on $(date)"
