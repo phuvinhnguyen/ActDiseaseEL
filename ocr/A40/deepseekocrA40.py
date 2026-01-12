@@ -1,13 +1,15 @@
 import argparse
 import os
+import fitz
+import pathlib
+import glob
+from datetime import datetime
 
-# Parse GPU ID from command line
 parser = argparse.ArgumentParser()
 parser.add_argument("--gpu", type=int, required=True, help="GPU ID (0-3)")
 parser.add_argument("--total_gpus", type=int, default=4, help="Total number of GPUs")
 args = parser.parse_args()
 
-# Set GPU BEFORE importing torch/model
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
 from transformers import AutoModel, AutoTokenizer
@@ -25,33 +27,17 @@ size_configs = {
     "Small": {"base_size": 640, "image_size": 640, "crop_mode": False},
     "Base": {"base_size": 1024, "image_size": 1024, "crop_mode": False},
     "Large": {"base_size": 1280, "image_size": 1280, "crop_mode": False},
-    "Gundam (Recommended)": {"base_size": 1024, "image_size": 640, "crop_mode": True},
+    "Gundam": {"base_size": 1024, "image_size": 640, "crop_mode": True},
 }
 
 model_size = "Large"
 
-config = size_configs.get(model_size, size_configs["Gundam (Recommended)"])
-
-import fitz
-import os
-import pathlib
-import glob
-import shutil
-from datetime import datetime
-
+config = size_configs.get(model_size, size_configs["Gundam"])
 
 pdf_list = [
-    # Should only include folders with images inside
-    # Example folders
-    # "/mimer/NOBACKUP/groups/naiss2025-22-855/IMAGE_DATA/APF/faire_face_berry/images/1985",
-    # "/mimer/NOBACKUP/groups/naiss2025-22-855/IMAGE_DATA/APF/faire_face_berry/images/1801",
-    # "/mimer/NOBACKUP/groups/naiss2025-22-855/IMAGE_DATA/APF/faire_face_berry/images/1955",
-    # "/mimer/NOBACKUP/groups/naiss2025-22-855/IMAGE_DATA/APF/faire_face/scannings/1985_1986"
-
-    # Example file
-    # "/mimer/NOBACKUP/groups/naiss2025-22-855/IMAGE_DATA/APF/faire_face_berry/images/1985/faire_face_berry_1985_vol000_nr106_0018.jpg",
 ]
-# Split files across GPUs - each GPU gets every Nth file
+
+# split files across GPUs
 my_files = pdf_list[args.gpu::args.total_gpus]
 
 prompt = "Convert the document, include images and tables."
@@ -59,11 +45,9 @@ prompt = "Convert the document, include images and tables."
 results_dir = "./results"
 os.makedirs(results_dir, exist_ok=True)
 
-# Unique temp dir per GPU to avoid conflicts
 temp_image_dir = f"./_temp_page_images_gpu_{args.gpu}"
 os.makedirs(temp_image_dir, exist_ok=True)
 
-# Unique log per GPU
 log_path = f"./logs_gpu_{args.gpu}.txt"
 
 def log(message):

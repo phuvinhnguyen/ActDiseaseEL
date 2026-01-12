@@ -4,7 +4,6 @@ import os
 import fitz
 import pathlib
 import glob
-# import shutil
 from datetime import datetime
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = '0' # Set project to use only one GPU
